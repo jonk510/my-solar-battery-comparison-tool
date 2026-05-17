@@ -1,0 +1,35 @@
+# Data files — do not commit personal meter data
+*.xlsx
+*.xls
+*.csv
+*.tsv
+
+# Generated outputs
+results/
+*.docx
+*.pdf
+*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Virtual environments
+.venv/
+venv/
+env/
