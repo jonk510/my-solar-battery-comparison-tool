@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 # ── Import simulation engine from the analyser ────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 from solar_battery_analyser import (
-    load_data, validate_consumption_data,
+    validate_consumption_data,
     add_solar, simulate, payback, baseline,
     ANALYSIS_YEARS, OPPORTUNITY_RATE,
     A1_RATE, A1_SUPPLY, MS_SUPPLY,
@@ -50,9 +50,52 @@ OPTION_COLOURS = ["#e8463a", "#0f9d58"]   # red for A, green for B
 
 @st.cache_data(show_spinner=False)
 def cached_load(file_bytes: bytes, filename: str) -> pd.DataFrame:
-    buf = io.BytesIO(file_bytes)
-    buf.name = filename
-    df = load_data(buf)
+    buf    = io.BytesIO(file_bytes)
+    suffix = os.path.splitext(filename)[1].lower()
+
+    if suffix in (".xlsx", ".xls"):
+        raw = pd.read_excel(buf)
+    elif suffix == ".tsv":
+        raw = pd.read_csv(buf, sep="\t")
+    else:
+        raw = pd.read_csv(buf)
+
+    raw.columns = raw.columns.str.strip()
+
+    # Mirror load_data column detection
+    if "Date" in raw.columns and "Time" in raw.columns:
+        raw["datetime"] = pd.to_datetime(
+            raw["Date"].astype(str) + " " + raw["Time"].astype(str),
+            dayfirst=True, errors="coerce",
+        )
+        kwh_col = next(
+            (c for c in raw.columns if c.lower() in ("kwh", "consumption", "usage", "energy")),
+            None,
+        )
+        if not kwh_col:
+            raise ValueError(
+                f"Found Date+Time columns but no kWh/consumption column. "
+                f"Available: {list(raw.columns)}"
+            )
+        raw["consumption_kwh"] = pd.to_numeric(raw[kwh_col], errors="coerce")
+    else:
+        raw.columns = raw.columns.str.lower().str.replace(" ", "_")
+        dc = next((c for c in raw.columns if "date" in c or "time" in c), None)
+        kc = next(
+            (c for c in raw.columns if any(k in c for k in ["kwh", "consumption", "usage", "energy"])),
+            None,
+        )
+        if not dc:
+            raise ValueError(f"Could not detect a datetime column. Found: {list(raw.columns)}")
+        if not kc:
+            raise ValueError(f"Could not detect a consumption column. Found: {list(raw.columns)}")
+        raw["datetime"] = pd.to_datetime(raw[dc], dayfirst=True, errors="coerce")
+        raw["consumption_kwh"] = pd.to_numeric(raw[kc], errors="coerce")
+
+    raw = raw[raw["datetime"].notna()].reset_index(drop=True)
+    df  = raw[["datetime", "consumption_kwh"]].sort_values("datetime").reset_index(drop=True)
+    df  = validate_consumption_data(df)
+
     df["slot"] = (df["datetime"].dt.hour * 2 + df["datetime"].dt.minute // 30).astype(int)
     df["doy"]  = df["datetime"].dt.dayofyear.astype(int)
     df["date"] = df["datetime"].dt.date
