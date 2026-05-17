@@ -110,7 +110,8 @@ def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff, _raw_df):
 
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label, _raw_df):
-    return payback(_raw_df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
+    df = add_solar(_raw_df, solar_kw)
+    return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
 
 
 def seasonal_daily_cost(res: dict) -> dict:
