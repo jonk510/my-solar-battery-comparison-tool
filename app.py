@@ -370,18 +370,46 @@ with st.sidebar:
     st.divider()
     st.subheader("2. Select quotes")
 
-    # ── Load quotes from xlsx ─────────────────────────────────────────────────
+    # ── Load quotes from xlsx (flexible column matching) ─────────────────────
     quotes_df = None
     if _QUOTES_PATH.exists():
         try:
             quotes_df = pd.read_excel(_QUOTES_PATH)
             quotes_df.columns = quotes_df.columns.str.strip()
-            if "Quote" in quotes_df.columns:
-                quotes_df = quotes_df.sort_values("Quote").reset_index(drop=True)
-            # Filter out base-case rows for the comparison selector
+            cols = {c.lower(): c for c in quotes_df.columns}
+
+            def _fc(keywords):
+                for kw in keywords:
+                    for lc, orig in cols.items():
+                        if kw in lc:
+                            return orig
+                raise ValueError(f"No column matching {keywords} in {list(quotes_df.columns)}")
+
+            col_vendor   = _fc(["vendor", "name", "label"])
+            col_solar    = _fc(["solar"])
+            col_battery  = _fc(["battery", "bat"])
+            col_inverter = _fc(["inverter", "inv"])
+            col_cost     = _fc(["price", "cost", "aud"])
+            col_order    = next(
+                (cols[lc] for lc in cols if any(k in lc for k in ["quote", "number", "order"])),
+                None,
+            )
+
+            if col_order:
+                quotes_df = quotes_df.sort_values(col_order)
+
+            # Normalise to consistent internal column names
+            quotes_df = quotes_df.rename(columns={
+                col_vendor:   "Vendor",
+                col_solar:    "Solar_kW",
+                col_battery:  "Battery_kWh",
+                col_inverter: "Inverter_kW",
+                col_cost:     "Cost_AUD",
+            }).reset_index(drop=True)
+
+            # Filter out base-case rows (solar=0 and battery=0)
             solar_quotes = quotes_df[
-                ~((quotes_df["Solar_kW"] == 0) &
-                  (quotes_df["Battery_kWh"] == 0))
+                ~((quotes_df["Solar_kW"] == 0) & (quotes_df["Battery_kWh"] == 0))
             ].reset_index(drop=True)
         except Exception as e:
             st.warning(f"Could not load quotes file: {e}")

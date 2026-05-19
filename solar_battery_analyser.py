@@ -45,6 +45,8 @@ _QUOTES_FILE = Path(__file__).parent / "solar_battery_quotes.xlsx"
 def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
     """Read quotes from an xlsx file and return a list of 5-tuples
     (label, solar_kW, battery_kWh, inverter_kW, cost_AUD).
+    Column names are matched flexibly by keyword so the spreadsheet headers
+    can be anything descriptive (e.g. 'solar array size [kW]' or 'Solar_kW').
     Returns an empty list and prints a warning if the file is not found.
     """
     if not path.exists():
@@ -54,17 +56,36 @@ def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
     try:
         df = pd.read_excel(path)
         df.columns = df.columns.str.strip()
-        required = {"Vendor", "Solar_kW", "Battery_kWh", "Inverter_kW", "Cost_AUD"}
-        missing  = required - set(df.columns)
-        if missing:
-            raise ValueError(f"Missing columns in quotes file: {missing}")
-        df = df.sort_values("Quote") if "Quote" in df.columns else df
+        cols = {c.lower(): c for c in df.columns}
+
+        def _find(keywords):
+            for kw in keywords:
+                for lc, orig in cols.items():
+                    if kw in lc:
+                        return orig
+            raise ValueError(
+                f"Could not find a column matching {keywords}. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+        col_vendor  = _find(["vendor", "name", "label", "quote name"])
+        col_solar   = _find(["solar"])
+        col_battery = _find(["battery", "bat"])
+        col_inverter= _find(["inverter", "inv"])
+        col_cost    = _find(["price", "cost", "aud"])
+        col_order   = _find(["quote", "number", "order", "#"]) if any(
+                          k in c for c in cols for k in ["quote", "number", "order"]
+                      ) else None
+
+        if col_order:
+            df = df.sort_values(col_order)
+
         return [
-            (str(row["Vendor"]),
-             float(row["Solar_kW"]),
-             float(row["Battery_kWh"]),
-             float(row["Inverter_kW"]),
-             float(row["Cost_AUD"]))
+            (str(row[col_vendor]),
+             float(row[col_solar]),
+             float(row[col_battery]),
+             float(row[col_inverter]),
+             float(row[col_cost]))
             for _, row in df.iterrows()
         ]
     except Exception as exc:
