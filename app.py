@@ -27,6 +27,7 @@ from solar_battery_analyser import (
     BAT_DOD, BAT_RTE, BAT_DEG, SOL_DEG, SYS_EFF,
     ms_rate, debs_rate, _monthly_net,
     CS, _QUOTES_FILE, SOLAR_K, SYS_EFF as _SYS_EFF, _lat,
+    solar_stc_rebate, STC_PRICE,
 )
 
 _QUOTES_PATH = _QUOTES_FILE
@@ -142,9 +143,9 @@ def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
 
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
-                   shade_summer, shade_autumn, shade_winter, _raw_df):
+                   shade_summer, shade_autumn, shade_winter, stc_price, _raw_df):
     df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
-    return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
+    return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=stc_price)
 
 
 @st.cache_data(show_spinner=False)
@@ -239,7 +240,7 @@ def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b
                 continue
 
             avg = sub.groupby("slot")[
-                ["solar_kwh", "s_slf", "b_dis", "g_imp", "consumption_kwh"]
+                ["solar_kwh", "s_slf", "b_dis", "g_imp", "g_exp", "consumption_kwh"]
             ].mean()
             h = avg.index / 2
 
@@ -253,6 +254,11 @@ def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b
             ax.plot(h, avg["consumption_kwh"], "k-", lw=1.2, label="Load")
             ax.plot(h, avg["solar_kwh"], "--", color=CS["solar"], lw=0.8,
                     alpha=0.65, label="Solar gen")
+            # Grid export — fill above load line when solar exceeds consumption
+            export_top = avg["consumption_kwh"] + avg["g_exp"]
+            ax.fill_between(h, avg["consumption_kwh"], export_top,
+                            color=CS.get("gexp", "#4fc3f7"), alpha=0.5,
+                            label="Grid export")
             ax.axvspan(15, 21, alpha=0.07, color="red")
             ax.axvspan(9,  15, alpha=0.06, color="green")
             ax.set_xlim(0, 24)
@@ -566,6 +572,15 @@ with st.sidebar:
     shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.50, 0.05)
     shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.40, 0.05)
 
+    st.divider()
+    st.subheader("4. STC price")
+    st.caption(
+        "Small-scale Technology Certificate spot price (inc GST). "
+        "Fluctuates daily; clearing-house max is $40 ex-GST (~$44 inc GST). "
+        "Check [STC prices](https://www.rec-registry.gov.au) for the current rate."
+    )
+    stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, float(STC_PRICE), 0.50)
+
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
 
@@ -602,12 +617,12 @@ with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
-        *shading, raw_df,
+        *shading, stc_price, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
-        *shading, raw_df,
+        *shading, stc_price, raw_df,
     )
 
 with st.spinner("Computing status quo…"):
@@ -704,8 +719,11 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
     pb_rows.append({
         "Option": f"{tag}: {cfg['label']}",
         "Tariff": cfg["tariff"],
-        "Gross cost": f"${cfg['cost']:,.0f}",
-        "Net cost (after rebates)": f"${pb['net']:,.0f}",
+        "Retail price (gross)": f"${cfg['cost']:,.0f}",
+        "  – STC solar rebate": f"-${pb.get('stc', 0):,.0f}",
+        "  – WA battery rebate": f"-${pb.get('state', 0):,.0f}",
+        "  – Federal battery rebate": f"-${pb.get('fed', 0):,.0f}",
+        "Purchase price (net)": f"${pb['net']:,.0f}",
         "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">25 yr",
         f"Opp-cost payback ({OPPORTUNITY_RATE*100:.0f}%)":
             f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">25 yr",

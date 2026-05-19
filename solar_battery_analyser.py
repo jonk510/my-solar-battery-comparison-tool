@@ -143,20 +143,28 @@ PERTH_LAT_DEG       = -31.95   # Perth latitude (degrees, negative = south)
 PERTH_SPECIFIC_YIELD = 1650    # kWh/kWp/year — unshaded, post SYS_EFF, north-facing Perth
 
 # ─── REBATES (1 May 2026 rates) ──────────────────────────────────────────────
-STATE_REBATE_FLAT = 1_300.0   # Synergy WA Residential Battery Scheme ($130/kWh, cap $1,300)
+STATE_REBATE_FLAT        = 1_300.0  # Synergy WA Residential Battery Scheme
+FEDERAL_BATTERY_RATE     = 237.0    # Cheaper Home Batteries Program — Perth Zone 3 ($/kWh)
+STC_ZONE3_FACTOR         = 1.382    # Perth / SW WA solar zone deeming factor
+STC_PRICE                = 39.0     # $/STC market price (varies ~$30–42; clearing house = $40)
+_STC_SCHEME_END          = 2030     # SRES deeming period ends Dec 2030
 
 
 def fed_battery_rebate(bat_kwh: float) -> float:
-    """Cheaper Home Batteries Program — tiered STC rebate from 1 May 2026.
-    Tier 1:  0–14 kWh  @ ~$252/kWh
-    Tier 2: 14–28 kWh  @ ~$151/kWh
-    Tier 3: 28–50 kWh  @  ~$38/kWh
-    Over 50 kWh: no rebate.
+    """Cheaper Home Batteries Program (from 1 May 2026) — Perth Zone 3 flat rate.
+    Capped at 50 kWh usable capacity.
     """
-    tier1 = min(bat_kwh, 14.0) * 252.0
-    tier2 = max(0.0, min(bat_kwh, 28.0) - 14.0) * 151.0
-    tier3 = max(0.0, min(bat_kwh, 50.0) - 28.0) * 38.0
-    return tier1 + tier2 + tier3
+    return min(bat_kwh, 50.0) * FEDERAL_BATTERY_RATE
+
+
+def solar_stc_rebate(solar_kw: float, stc_price: float = STC_PRICE) -> float:
+    """Small-scale Technology Certificate rebate for solar panels — Perth Zone 3.
+    STCs = kWp × zone_factor × remaining_deeming_years
+    stc_price is the market spot price (inc GST); default ~$39.
+    """
+    import datetime
+    deeming = max(0, _STC_SCHEME_END - datetime.date.today().year)
+    return solar_kw * STC_ZONE3_FACTOR * deeming * stc_price
 
 # =============================================================================
 
@@ -695,16 +703,17 @@ def baseline(df, tariff):
     return (load * np.vectorize(ms_rate)(slots.astype(int))).sum() + MS_SUPPLY*n_days
 
 
-def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label):
+def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=STC_PRICE):
     # ── 25-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
     # Years 1–25: solar+battery output degrades slightly each year
     #             electricity prices rise at TARIFF_ESC % per year
     #             annual saving = (baseline cost that year) - (modelled cost that year)
     # Payback year = first year where cumulative savings exceed upfront cost
-    fed  = min(fed_battery_rebate(bat_kwh), cost*0.4)
-    state = STATE_REBATE_FLAT if bat_kwh>0 else 0
-    net  = max(0, cost - fed - state)
+    stc   = solar_stc_rebate(solar_kw, stc_price)
+    fed   = min(fed_battery_rebate(bat_kwh), cost * 0.4)
+    state = STATE_REBATE_FLAT if bat_kwh > 0 else 0
+    net   = max(0, cost - stc - fed - state)
     base = baseline(df, tariff)
 
     savings=[]; net_costs=[]; cum=[-net]; cum_disc=[-net]
@@ -725,7 +734,7 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label):
     pb_yr_disc = 0 if net == 0 else next((yr for yr,cf in enumerate(cum_disc[1:],1) if cf>=0), None)
     npv        = cum_disc[-1]
     return dict(label=label, solar_kw=solar_kw, bat_kwh=bat_kwh, inv_kw=inv_kw,
-                cost=cost, fed=fed, state=state, net=net, tariff=tariff,
+                cost=cost, stc=stc, fed=fed, state=state, net=net, tariff=tariff,
                 pb_yr=pb_yr, pb_yr_disc=pb_yr_disc, npv=npv,
                 savings=savings, net_costs=net_costs, cum=cum, cum_disc=cum_disc,
                 total_save=sum(savings),
@@ -762,7 +771,7 @@ def payback_arbitrage(raw_df, bat_kwh, inv_kw, cost, label):
     pb_yr_disc = 0 if net == 0 else next((yr for yr, cf in enumerate(cum_disc[1:], 1) if cf >= 0), None)
     npv        = cum_disc[-1]
     return dict(label=label, solar_kw=0.0, bat_kwh=bat_kwh, inv_kw=inv_kw,
-                cost=cost, fed=fed, state=state, net=net, tariff="Midday Saver",
+                cost=cost, stc=0.0, fed=fed, state=state, net=net, tariff="Midday Saver",
                 pb_yr=pb_yr, pb_yr_disc=pb_yr_disc, npv=npv,
                 savings=savings, net_costs=net_costs, cum=cum, cum_disc=cum_disc,
                 total_save=sum(savings),
