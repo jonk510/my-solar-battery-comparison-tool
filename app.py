@@ -370,6 +370,79 @@ def make_monthly_fig(res_a, res_b, raw_df, cfg_a, cfg_b) -> plt.Figure:
     return fig
 
 
+def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
+                            shade_summer: float, shade_autumn: float,
+                            shade_winter: float) -> plt.Figure:
+    """2×2 grid — one subplot per season, each with 3 curves:
+      · Option A unshaded  (shade = 1.0)
+      · Option A shaded    (user shading factors)
+      · Option B shaded    (user shading factors)
+    x-axis = hour of day, y-axis = kWh per 30-min slot.
+    """
+    # Representative mid-season day-of-year (Southern Hemisphere)
+    SEASONS = [
+        ("Summer (Dec–Feb)", 15,  shade_summer),   # ~Jan 15
+        ("Autumn (Mar–May)", 105, shade_autumn),   # ~Apr 15
+        ("Winter (Jun–Aug)", 196, shade_winter),   # ~Jul 15
+        ("Spring (Sep–Nov)", 288, shade_autumn),   # ~Oct 15
+    ]
+
+    def _day_profile(solar_kw: float, doy: int, shade: float) -> np.ndarray:
+        decl  = np.radians(-23.45 * np.cos(2 * np.pi * (doy + 10) / 365))
+        slots = np.arange(48)
+        hours = (slots + 0.5) / 2.0
+        ha    = np.radians(15.0 * (hours - 12.0))
+        sin_e = (np.sin(_lat) * np.sin(decl)
+                 + np.cos(_lat) * np.cos(decl) * np.cos(ha))
+        irrad = np.maximum(0.0, sin_e)
+        return solar_kw * irrad * SOLAR_K * _SYS_EFF * 0.5 * shade
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharey=False)
+    fig.patch.set_facecolor("white")
+    hours = (np.arange(48) + 0.5) / 2.0
+
+    for ax, (season, doy, shade) in zip(axes.flat, SEASONS):
+        kw_a = cfg_a["solar"]
+        kw_b = cfg_b["solar"]
+
+        unshaded_a = _day_profile(kw_a, doy, 1.0)
+        shaded_a   = _day_profile(kw_a, doy, shade)
+        shaded_b   = _day_profile(kw_b, doy, shade)
+
+        ax.plot(hours, unshaded_a, color=OPTION_COLOURS[0], ls="--", lw=1.4, alpha=0.6,
+                label=f"A unshaded ({kw_a} kW)")
+        ax.plot(hours, shaded_a,   color=OPTION_COLOURS[0], ls="-",  lw=2.0,
+                label=f"A shaded  ({kw_a} kW, ×{shade:.2f})")
+        ax.plot(hours, shaded_b,   color=OPTION_COLOURS[1], ls="-",  lw=2.0,
+                label=f"B shaded  ({kw_b} kW, ×{shade:.2f})")
+
+        ax.fill_between(hours, shaded_a, unshaded_a,
+                        color=OPTION_COLOURS[0], alpha=0.08, label="_")
+
+        ax.set_title(season, fontsize=10, fontweight="bold")
+        ax.set_xlim(5, 20)
+        ax.set_xticks(range(6, 21, 2))
+        ax.set_xticklabels([f"{h:02d}:00" for h in range(6, 21, 2)], fontsize=8)
+        ax.set_xlabel("Hour of day", fontsize=8)
+        ax.set_ylabel("kWh / 30 min", fontsize=8)
+        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+        ax.tick_params(labelsize=8)
+        ax.legend(fontsize=7, loc="upper left")
+        ax.grid(axis="y", alpha=0.25)
+
+        # Shading loss annotation
+        peak_loss_pct = (1 - shade) * 100
+        ax.text(0.98, 0.97, f"Shading loss: {peak_loss_pct:.0f}%",
+                transform=ax.transAxes, ha="right", va="top", fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#aaaaaa",
+                          alpha=0.85, lw=0.8))
+
+    fig.suptitle("Solar Generation Profiles by Season — Shaded vs Unshaded",
+                 fontsize=11, fontweight="bold", y=1.01)
+    fig.tight_layout()
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — upload + configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -577,6 +650,19 @@ def metric_col(col, res, pb, cfg, bl, colour):
 
 metric_col(col_a, res_a, pb_a, cfg_a, bl_a, OPTION_COLOURS[0])
 metric_col(col_b, res_b, pb_b, cfg_b, bl_b, OPTION_COLOURS[1])
+
+# ── Solar generation profiles ────────────────────────────────────────────────
+st.divider()
+st.subheader("Solar Generation Profiles by Season")
+st.caption(
+    "Theoretical mid-season output for each option (kWh per 30-min slot). "
+    "Dashed = Option A unshaded (shade factor 1.0). "
+    "Solid = with your shading factors applied. "
+    "Shaded area shows the generation lost to shading."
+)
+fig_profiles = make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter)
+st.pyplot(fig_profiles, use_container_width=True)
+plt.close(fig_profiles)
 
 # ── Typical seasonal days ─────────────────────────────────────────────────────
 st.divider()
