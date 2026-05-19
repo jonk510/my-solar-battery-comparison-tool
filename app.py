@@ -26,10 +26,39 @@ from solar_battery_analyser import (
     TARIFF_ESC, DEBS_DECL,
     BAT_DOD, BAT_RTE, BAT_DEG, SOL_DEG, SYS_EFF,
     ms_rate, debs_rate, _monthly_net,
-    CS, _QUOTES_FILE,
+    CS, _QUOTES_FILE, SOLAR_K, SYS_EFF as _SYS_EFF, _lat,
 )
 
 _QUOTES_PATH = _QUOTES_FILE
+
+
+def add_solar_shaded(raw_df: pd.DataFrame, solar_kw: float,
+                     shade_summer: float, shade_autumn: float,
+                     shade_winter: float) -> pd.DataFrame:
+    """Like add_solar() but uses caller-supplied seasonal shading factors."""
+    def _profile(kw, doy):
+        decl  = np.radians(-23.45 * np.cos(2 * np.pi * (doy + 10) / 365))
+        slots = np.arange(48)
+        hours = (slots + 0.5) / 2.0
+        ha    = np.radians(15.0 * (hours - 12.0))
+        sin_e = np.sin(_lat) * np.sin(decl) + np.cos(_lat) * np.cos(decl) * np.cos(ha)
+        irrad = np.maximum(0.0, sin_e)
+        m = (pd.Timestamp("2024-01-01") + pd.Timedelta(days=int(doy) - 1)).month
+        if m in (12, 1, 2):    sf = shade_summer
+        elif m in (6, 7, 8):   sf = shade_winter
+        else:                  sf = shade_autumn   # Mar–May and Sep–Nov
+        return kw * irrad * SOLAR_K * _SYS_EFF * 0.5 * sf
+
+    cache = {}
+    def get(row):
+        doy = int(row["doy"])
+        if doy not in cache:
+            cache[doy] = _profile(solar_kw, doy)
+        return cache[doy][int(row["slot"])]
+
+    df = raw_df.copy()
+    df["solar_kwh"] = df.apply(get, axis=1)
+    return df
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -105,14 +134,16 @@ def cached_load(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff, _raw_df):
-    df_solar = add_solar(_raw_df, solar_kw)
+def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
+                    shade_summer, shade_autumn, shade_winter, _raw_df):
+    df_solar = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return simulate(df_solar, solar_kw, bat_kwh, inv_kw, tariff)
 
 
 @st.cache_data(show_spinner=False)
-def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label, _raw_df):
-    df = add_solar(_raw_df, solar_kw)
+def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
+                   shade_summer, shade_autumn, shade_winter, _raw_df):
+    df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
 
 
@@ -431,24 +462,22 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
         if solar_quotes is not None and len(solar_quotes) > 0:
-            labels   = solar_quotes["Vendor"].tolist()
-            sel_idx  = st.selectbox(
-                "Quote", range(len(labels)),
-                format_func=lambda i: labels[i],
-                index=min(default_idx, len(labels) - 1),
+            def _fmt(i):
+                r = solar_quotes.iloc[i]
+                return (f"{r['Vendor']}  —  {r['Solar_kW']:.2g} kW solar / "
+                        f"{r['Battery_kWh']:.4g} kWh battery  (${int(r['Cost_AUD']):,})")
+            sel_idx = st.selectbox(
+                "Quote", range(len(solar_quotes)),
+                format_func=_fmt,
+                index=min(default_idx, len(solar_quotes) - 1),
                 key=f"quote_{tag}",
             )
-            row = solar_quotes.iloc[sel_idx]
+            row   = solar_quotes.iloc[sel_idx]
             solar = float(row["Solar_kW"])
             bat   = float(row["Battery_kWh"])
             inv   = float(row["Inverter_kW"])
             cost  = int(row["Cost_AUD"])
-            label = str(row["Vendor"])
-            # Show details read-only
-            st.caption(
-                f"☀️ {solar} kW solar  ·  🔋 {bat} kWh battery  ·  "
-                f"⚡ {inv} kW inverter  ·  💰 ${cost:,}"
-            )
+            label = _fmt(sel_idx)
         else:
             # Fallback to manual entry if no quotes file
             label = st.text_input("Label", key=f"lbl_{tag}",
@@ -464,6 +493,13 @@ with st.sidebar:
 
     cfg_a = option_selector("A", default_idx=0)
     cfg_b = option_selector("B", default_idx=1)
+
+    st.divider()
+    st.subheader("3. Site shading")
+    st.caption("Fraction of unshaded solar reaching the panels each season.")
+    shade_summer  = st.slider("Summer shading (Dec–Feb)",  0.0, 1.0, 0.60, 0.05)
+    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.50, 0.05)
+    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.40, 0.05)
 
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
@@ -485,26 +521,32 @@ if not run:
 # ── Run simulations ──────────────────────────────────────────────────────────
 raw_hash = hash(uploaded.getvalue())
 
+shading = (shade_summer, shade_autumn, shade_winter)
+
 with st.spinner("Simulating Option A…"):
     res_a = cached_simulate(
-        raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"], raw_df
+        raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
+        *shading, raw_df,
     )
 with st.spinner("Simulating Option B…"):
     res_b = cached_simulate(
-        raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"], raw_df
+        raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
+        *shading, raw_df,
     )
 with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
-        cfg_a["cost"], cfg_a["tariff"], cfg_a["label"], raw_df
+        cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
+        *shading, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
-        cfg_b["cost"], cfg_b["tariff"], cfg_b["label"], raw_df
+        cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
+        *shading, raw_df,
     )
 
-bl_a = baseline(add_solar(raw_df, cfg_a["solar"]), cfg_a["tariff"])
-bl_b = baseline(add_solar(raw_df, cfg_b["solar"]), cfg_b["tariff"])
+bl_a = baseline(add_solar_shaded(raw_df, cfg_a["solar"], *shading), cfg_a["tariff"])
+bl_b = baseline(add_solar_shaded(raw_df, cfg_b["solar"], *shading), cfg_b["tariff"])
 
 # ── Metric cards ─────────────────────────────────────────────────────────────
 st.subheader("Key Metrics")
