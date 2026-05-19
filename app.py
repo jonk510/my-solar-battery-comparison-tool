@@ -147,6 +147,13 @@ def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
     return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
 
 
+@st.cache_data(show_spinner=False)
+def cached_simulate_no_solar(raw_df_hash, tariff, _raw_df):
+    df = _raw_df.copy()
+    df["solar_kwh"] = 0.0
+    return simulate(df, 0.0, 0.0, 5.0, tariff)
+
+
 def seasonal_daily_cost(res: dict) -> dict:
     """Return average daily net cost per season from a simulate() result."""
     df  = res["df"].copy()
@@ -205,32 +212,27 @@ def baseline_seasonal_cost(raw_df: pd.DataFrame, tariff: str) -> dict:
 # Plot functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_seasonal_fig(res_a, res_b, cfg_a: dict, cfg_b: dict, raw_df: pd.DataFrame) -> plt.Figure:
-    """2×4 grid: rows = options A/B, cols = seasons."""
-    costs_a   = seasonal_daily_cost(res_a)
-    costs_b   = seasonal_daily_cost(res_b)
-    base_a    = baseline_seasonal_cost(raw_df, cfg_a["tariff"])
-    base_b    = baseline_seasonal_cost(raw_df, cfg_b["tariff"])
+def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """4×3 grid: rows = seasons, cols = [Status Quo | Option A | Option B]."""
+    costs_base = seasonal_daily_cost(res_base)
+    costs_a    = seasonal_daily_cost(res_a)
+    costs_b    = seasonal_daily_cost(res_b)
 
-    fig, axes = plt.subplots(2, 4, figsize=(18, 7), sharey=False)
-    fig.patch.set_facecolor("white")
-    seasons   = list(SEASON_MONTHS.keys())
-    row_labels = [
-        f"Option A: {cfg_a['label']}",
-        f"Option B: {cfg_b['label']}",
+    col_configs = [
+        (res_base, costs_base, "gray",            "Status Quo\n(no solar/battery)"),
+        (res_a,    costs_a,    OPTION_COLOURS[0], f"Option A: {cfg_a['label']}"),
+        (res_b,    costs_b,    OPTION_COLOURS[1], f"Option B: {cfg_b['label']}"),
     ]
-    row_res    = [res_a, res_b]
-    row_costs  = [costs_a, costs_b]
-    row_base   = [base_a, base_b]
-    row_cols   = OPTION_COLOURS
 
-    for row, (res, costs, base, col, row_lbl) in enumerate(
-            zip(row_res, row_costs, row_base, row_cols, row_labels)):
+    fig, axes = plt.subplots(4, 3, figsize=(18, 18), sharey=False)
+    fig.patch.set_facecolor("white")
+
+    for col_idx, (res, costs, col, col_lbl) in enumerate(col_configs):
         df = res["df"].copy()
         df["month"] = df["datetime"].dt.month
 
-        for c, (season, months) in enumerate(SEASON_MONTHS.items()):
-            ax  = axes[row][c]
+        for row_idx, (season, months) in enumerate(SEASON_MONTHS.items()):
+            ax  = axes[row_idx][col_idx]
             sub = df[df["month"].isin(months)]
             if sub.empty:
                 ax.set_visible(False)
@@ -256,44 +258,48 @@ def make_seasonal_fig(res_a, res_b, cfg_a: dict, cfg_b: dict, raw_df: pd.DataFra
             ax.set_xlim(0, 24)
             ax.set_xticks(range(0, 25, 6))
             ax.set_xticklabels([f"{h:02d}h" for h in range(0, 25, 6)], fontsize=7)
-            ax.set_ylabel("Avg kWh / 30 min", fontsize=7)
             ax.tick_params(axis="y", labelsize=7)
 
             # Cost annotation
-            daily  = costs.get(season)
-            b_cost = base.get(season)
-            if daily is not None and b_cost is not None:
-                saving = b_cost - daily
-                sign   = "+" if saving >= 0 else ""
+            daily = costs.get(season)
+            if daily is not None:
+                if col_idx == 0:
+                    annotation = f"Avg daily cost: ${daily:.2f}"
+                else:
+                    base_d = costs_base.get(season)
+                    if base_d is not None:
+                        saving = base_d - daily
+                        sign   = "+" if saving >= 0 else ""
+                        annotation = (f"Avg daily cost: ${daily:.2f}\n"
+                                      f"vs status quo: {sign}${saving:.2f}/day")
+                    else:
+                        annotation = f"Avg daily cost: ${daily:.2f}"
                 ax.text(
-                    0.98, 0.97,
-                    f"Avg daily cost: ${daily:.2f}\n"
-                    f"Saving vs baseline: {sign}${saving:.2f}/day",
+                    0.98, 0.97, annotation,
                     transform=ax.transAxes,
                     ha="right", va="top", fontsize=7,
                     bbox=dict(boxstyle="round,pad=0.3", fc="white",
                               ec=col, alpha=0.85, lw=1.0),
                 )
 
-            # Column header on top row only
-            if row == 0:
-                ax.set_title(season, fontsize=9, fontweight="bold")
+            # Season name on left column; short y-label on others
+            if col_idx == 0:
+                ax.set_ylabel(f"{season}\nAvg kWh / 30 min", fontsize=7.5, fontweight="bold")
             else:
-                ax.set_title("")
+                ax.set_ylabel("Avg kWh / 30 min", fontsize=7)
 
-        # Row label as y-axis label on first column
-        axes[row][0].set_ylabel(
-            f"{row_lbl}\nAvg kWh / 30 min", fontsize=7.5, fontweight="bold"
-        )
+            # Column header on top row only
+            if row_idx == 0:
+                ax.set_title(col_lbl, fontsize=9, fontweight="bold", color=col)
 
     # Shared legend
     handles, labels_ = axes[0][0].get_legend_handles_labels()
     fig.legend(
         handles, labels_,
         loc="lower center", ncol=5, fontsize=8,
-        bbox_to_anchor=(0.5, -0.02),
+        bbox_to_anchor=(0.5, -0.01),
     )
-    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
     return fig
 
 
@@ -326,43 +332,29 @@ def make_payback_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Fi
     return fig
 
 
-def make_monthly_fig(res_a, res_b, raw_df, cfg_a, cfg_b) -> plt.Figure:
-    """Monthly net electricity cost comparison."""
+def make_monthly_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """Monthly net electricity cost — Status Quo vs Option A vs Option B."""
+    m_base = _monthly_net(res_base)
     m_a    = _monthly_net(res_a)
     m_b    = _monthly_net(res_b)
     months = range(1, 13)
     mnames = ["Jan","Feb","Mar","Apr","May","Jun",
               "Jul","Aug","Sep","Oct","Nov","Dec"]
 
-    # Baseline — use tariff of option A for a single baseline line
-    tariff_bl = cfg_a["tariff"]
-    df_bl     = raw_df.copy()
-    slots     = df_bl["slot"].values.astype(int)
-    if tariff_bl == "A1 Flat":
-        df_bl["ic"] = df_bl["consumption_kwh"] * A1_RATE
-        sc_bl = A1_SUPPLY
-    else:
-        df_bl["ic"] = df_bl["consumption_kwh"] * np.vectorize(ms_rate)(slots)
-        sc_bl = MS_SUPPLY
-    df_bl["month"] = df_bl["datetime"].dt.month
-    df_bl["date"]  = df_bl["datetime"].dt.date
-    grp    = df_bl.groupby("month").agg(ic=("ic","sum"), days=("date","nunique"))
-    bl_net = (grp["ic"] + grp["days"] * sc_bl).reindex(range(1,13), fill_value=0)
-
-    fig, ax = plt.subplots(figsize=(11, 4))
+    fig, ax = plt.subplots(figsize=(13, 4))
     fig.patch.set_facecolor("white")
     x = np.arange(12)
-    w = 0.35
-    ax.bar(x - w/2, [m_a["net"].get(m, 0) for m in months], w,
-           label=f"A: {cfg_a['label']}", color=OPTION_COLOURS[0], alpha=0.8)
-    ax.bar(x + w/2, [m_b["net"].get(m, 0) for m in months], w,
-           label=f"B: {cfg_b['label']}", color=OPTION_COLOURS[1], alpha=0.8)
-    ax.step(x, [bl_net.get(m, 0) for m in months], where="mid",
-            color="black", lw=1.3, ls="--", label="Baseline (no solar)")
+    w = 0.25
+    ax.bar(x - w, [m_base["net"].get(m, 0) for m in months], w,
+           label="Status Quo (no solar/battery)", color="gray", alpha=0.75)
+    ax.bar(x,     [m_a["net"].get(m, 0) for m in months], w,
+           label=f"Option A: {cfg_a['label']}", color=OPTION_COLOURS[0], alpha=0.8)
+    ax.bar(x + w, [m_b["net"].get(m, 0) for m in months], w,
+           label=f"Option B: {cfg_b['label']}", color=OPTION_COLOURS[1], alpha=0.8)
     ax.set_xticks(x); ax.set_xticklabels(mnames)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
     ax.set_ylabel("Monthly Net Cost (AUD)")
-    ax.set_title("Monthly Electricity Cost — Option A vs B vs Baseline")
+    ax.set_title("Monthly Electricity Cost — Status Quo vs Option A vs Option B")
     ax.axhline(0, color="black", lw=0.5, ls=":")
     ax.legend(fontsize=8)
     ax.grid(axis="y", alpha=0.3)
@@ -618,12 +610,31 @@ with st.spinner("Computing payback…"):
         *shading, raw_df,
     )
 
+with st.spinner("Computing status quo…"):
+    res_base = cached_simulate_no_solar(raw_hash, cfg_a["tariff"], raw_df)
+cfg_base = {"label": "Status Quo", "tariff": cfg_a["tariff"]}
+
 bl_a = baseline(add_solar_shaded(raw_df, cfg_a["solar"], *shading), cfg_a["tariff"])
 bl_b = baseline(add_solar_shaded(raw_df, cfg_b["solar"], *shading), cfg_b["tariff"])
 
 # ── Metric cards ─────────────────────────────────────────────────────────────
 st.subheader("Key Metrics")
-col_a, col_b = st.columns(2)
+col_base_m, col_a_m, col_b_m = st.columns(3)
+
+with col_base_m:
+    st.markdown(
+        "<div style='border-left:4px solid gray; padding-left:10px'>"
+        "<b>Status Quo (no solar/battery)</b>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    base_annual = res_base["net_cost"]
+    r1, r2 = st.columns(2)
+    r1.metric("Annual cost", f"${base_annual:,.0f}")
+    r2.metric("Monthly avg", f"${base_annual/12:,.0f}")
+    r3, r4 = st.columns(2)
+    r3.metric("Self-sufficiency", "0%")
+    r4.metric("Grid reliance", "100%")
 
 def metric_col(col, res, pb, cfg, bl, colour):
     annual_saving = bl - res["net_cost"]
@@ -648,8 +659,8 @@ def metric_col(col, res, pb, cfg, bl, colour):
         r7.metric("Annual export", f"{res['annual_export_kwh']:,.0f} kWh")
         r8.metric("Net system cost", f"${pb['net']:,.0f}")
 
-metric_col(col_a, res_a, pb_a, cfg_a, bl_a, OPTION_COLOURS[0])
-metric_col(col_b, res_b, pb_b, cfg_b, bl_b, OPTION_COLOURS[1])
+metric_col(col_a_m, res_a, pb_a, cfg_a, bl_a, OPTION_COLOURS[0])
+metric_col(col_b_m, res_b, pb_b, cfg_b, bl_b, OPTION_COLOURS[1])
 
 # ── Solar generation profiles ────────────────────────────────────────────────
 st.divider()
@@ -674,7 +685,7 @@ st.caption(
 )
 
 with st.spinner("Generating seasonal charts…"):
-    fig_seasonal = make_seasonal_fig(res_a, res_b, cfg_a, cfg_b, raw_df)
+    fig_seasonal = make_seasonal_fig(res_base, res_a, res_b, cfg_base, cfg_a, cfg_b)
 st.pyplot(fig_seasonal, use_container_width=True)
 plt.close(fig_seasonal)
 
@@ -710,7 +721,7 @@ st.divider()
 st.subheader("Monthly Electricity Cost")
 
 with st.spinner("Generating monthly chart…"):
-    fig_monthly = make_monthly_fig(res_a, res_b, raw_df, cfg_a, cfg_b)
+    fig_monthly = make_monthly_fig(res_base, res_a, res_b, cfg_base, cfg_a, cfg_b)
 st.pyplot(fig_monthly, use_container_width=True)
 plt.close(fig_monthly)
 
