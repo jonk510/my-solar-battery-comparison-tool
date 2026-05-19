@@ -567,27 +567,46 @@ def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0):
     load_arr  = df["consumption_kwh"].values
     slot_arr  = df["slot"].values
 
-    # ── Battery dispatch logic (runs for every 30-minute interval in order):
-    # If solar > load:  charge battery from surplus, export remainder
-    # If solar < load:  discharge battery to cover shortfall, import remainder
-    # SoC = state of charge (kWh stored), clamped to [0, usable capacity]
-    # All energy through the battery loses sqrt(RTE) on the way in and out
+    # ── Battery dispatch logic (tariff-aware, runs per 30-min interval):
+    #
+    # A1 Flat — greedy: discharge battery whenever load > solar (all hours same cost).
+    #
+    # Midday Saver — price-aware to maximise value of stored energy:
+    #   Super off-peak 9am–3pm (slots 18–30): grid costs only 8.6¢/kWh.
+    #     → Solar surplus charges battery as normal.
+    #     → When load > solar, buy cheap grid; do NOT discharge battery.
+    #       Reserving charge for the expensive peak is worth ~44¢/kWh more.
+    #   Peak 3pm–9pm (slots 30–42): grid costs 53.8¢/kWh.
+    #     → Discharge battery first; only import from grid when battery is empty.
+    #   Off-peak overnight (other slots): grid costs 22.2¢/kWh.
+    #     → Discharge battery normally to cover overnight load.
+
+    ms_sop = (tariff != "A1 Flat")  # flag: apply SOP hold-back logic
+
     for i in range(n):
         load  = load_arr[i]
         solar = solar_arr[i]
+        slot  = int(slot_arr[i])
         net   = solar - load
         if net >= 0:
+            # Solar surplus: charge battery from surplus, export the rest
             s_slf[i] = load
-            chg = min(net, max_chg*0.5, (usable-soc)/BAT_RTE**0.5)  # how much surplus solar can the battery absorb this interval?
+            chg = min(net, max_chg*0.5, (usable-soc)/BAT_RTE**0.5)
             soc = min(soc + chg*BAT_RTE**0.5, usable)
             g_exp[i] = max(0, net - chg)
             b_chg[i] = chg
         else:
+            # Load > solar
             s_slf[i] = solar
-            dis = min(-net, inv_kw*0.5, soc)  # how much stored energy can cover the shortfall?
-            soc = max(0, soc - dis)
-            g_imp[i] = max(0, -net - dis*BAT_RTE**0.5)
-            b_dis[i] = dis
+            if ms_sop and (18 <= slot < 30):
+                # Super off-peak: grid is cheapest — buy from grid, save battery for peak
+                g_imp[i] = -net
+            else:
+                # Peak or off-peak: discharge battery first, grid only if battery empty
+                dis = min(-net, inv_kw*0.5, soc)
+                soc = max(0, soc - dis)
+                g_imp[i] = max(0, -net - dis*BAT_RTE**0.5)
+                b_dis[i] = dis
         soc_a[i] = soc
 
     df = df.copy()
