@@ -704,7 +704,7 @@ def baseline(df, tariff):
 
 
 def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=STC_PRICE):
-    # ── 25-year payback model:
+    # ── 20-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
     # Years 1–25: solar+battery output degrades slightly each year
     #             electricity prices rise at TARIFF_ESC % per year
@@ -746,7 +746,7 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=STC_PR
 
 
 def payback_arbitrage(raw_df, bat_kwh, inv_kw, cost, label):
-    """25-year payback for a battery-only grid arbitrage scenario (Midday Saver)."""
+    """20-year payback for a battery-only grid arbitrage scenario (Midday Saver)."""
     # Same structure as payback() but uses simulate_grid_arbitrage() each year.
     # No solar degradation — only battery capacity degrades over time.
     fed   = min(fed_battery_rebate(bat_kwh), cost * 0.4)
@@ -1544,7 +1544,7 @@ def make_dashboard(all_res, pbs, raw_df, out_dir,
 
     # 06 payback — all quotes + arbitrage
     fig,ax = plt.subplots(figsize=(14,7))
-    fig.suptitle("Payback Analysis — All Quotes (25-Year Horizon)",
+    fig.suptitle("Payback Analysis — All Quotes (20-Year Horizon)",
                  fontsize=13,fontweight="bold")
     combined_pbs = list(pbs) + (list(arbit_pbs) if arbit_pbs else [])
     payback_plot(combined_pbs, ax)
@@ -1743,13 +1743,13 @@ def print_summary(all_res, pbs, raw_df):
               f"  ${sav:>7,.2f}"
               f"  {r['self_suf_pct']:>7.1f}%")
     print(f"\n{B}")
-    print("  PAYBACK & FINANCIAL SUMMARY (25-Year Horizon)")
+    print("  PAYBACK & FINANCIAL SUMMARY (20-Year Horizon)")
     print(B)
-    print(f"  {'Label':<36} {'Tariff':<15} {'Gross':>9} {'Net':>9} {'Payback':>8} {'Disc Pb':>8} {'NPV@8%':>10} {'25yr Save':>11} {'ROI':>8}")
+    print(f"  {'Label':<36} {'Tariff':<15} {'Gross':>9} {'Net':>9} {'Payback':>8} {'Disc Pb':>8} {'NPV@8%':>10} {'20yr Save':>11} {'ROI':>8}")
     print(f"  {S}")
     for pb in pbs:
-        pbl  = f"{pb['pb_yr']}y"       if pb["pb_yr"]       else ">25y"
-        pbld = f"{pb['pb_yr_disc']}y"  if pb.get("pb_yr_disc") else ">25y"
+        pbl  = f"{pb['pb_yr']}y"       if pb["pb_yr"]       else ">20y"
+        pbld = f"{pb['pb_yr_disc']}y"  if pb.get("pb_yr_disc") else ">20y"
         npv_s = f"${pb['npv']:>8,.0f}" if pb.get("npv") is not None else "       n/a"
         print(f"  {pb['label'][:35]:<36} {pb['tariff']:<15}"
               f"  ${pb['cost']:>7,.0f}"
@@ -1960,8 +1960,8 @@ def write_excel(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir):
         pb_cf = {"Year": list(range(ANALYSIS_YEARS + 1))}
         for pb in pbs:
             pb_cf[f"{pb['label'][:28]} | {pb['tariff']}"] = pb["cum"]
-        pd.DataFrame(pb_cf).to_excel(writer, sheet_name="25-Year Cashflow", index=False)
-        ws = writer.sheets["25-Year Cashflow"]
+        pd.DataFrame(pb_cf).to_excel(writer, sheet_name="20-Year Cashflow", index=False)
+        ws = writer.sheets["20-Year Cashflow"]
         style_header(ws); autofit(ws)
         ws.freeze_panes = "B2"
 
@@ -1977,11 +1977,11 @@ def write_excel(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir):
                 "Federal Rebate ($)":  round(pb["fed"], 0),
                 "State Rebate ($)":    pb["state"],
                 "Net Out-of-Pocket ($)":round(pb["net"], 0),
-                "Payback (years)":          pb["pb_yr"] if pb["pb_yr"] else ">25",
-                "Opp-Cost Payback (years)": pb.get("pb_yr_disc") or ">25",
+                "Payback (years)":          pb["pb_yr"] if pb["pb_yr"] else ">20",
+                "Opp-Cost Payback (years)": pb.get("pb_yr_disc") or ">20",
                 "NPV @ 8% ($)":            round(pb.get("npv", 0), 0),
-                "25-yr Total Saving ($)":  round(pb["total_save"], 0),
-                "25-yr ROI (%)":           round(pb["roi"], 1),
+                "20-yr Total Saving ($)":  round(pb["total_save"], 0),
+                "20-yr ROI (%)":           round(pb["roi"], 1),
                 "Year-1 Saving ($)":       round(pb["yr1_save"], 0),
             })
         pd.DataFrame(pb_rows).to_excel(writer, sheet_name="Payback Summary", index=False)
@@ -2269,7 +2269,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
     doc.add_paragraph(
         "This report models the financial impact of solar and battery storage at your property, "
         "using your actual Synergy half-hourly smart meter data. Sections 1–5 explain the "
-        "modelling methodology; Sections 6–7 give year-1 and 25-year financial results per quote; "
+        "modelling methodology; Sections 6–7 give year-1 and 20-year financial results per quote; "
         "Sections 8–9 cover zero-net sizing and solar optimisation; "
         "Section 10 lists model caveats; Section 11 contains supporting charts. "
         "Check Fig 5 first — if the modelled baseline deviates significantly from your actual "
@@ -2295,7 +2295,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
         doc.add_paragraph(
             f"Across all quotes modelled, the fastest payback is '{best_pb['label']}' on the "
             f"{best_pb['tariff']} tariff, with an estimated payback period of {best_pb['pb_yr']} "
-            f"years and a cumulative saving of ${best_pb['total_save']:,.0f} over 25 years after "
+            f"years and a cumulative saving of ${best_pb['total_save']:,.0f} over 20 years after "
             f"deducting rebates. This is a nominal figure — it does not discount future cash flows "
             f"to present value. The payback period is the most useful single metric for comparing "
             f"options: shorter payback means less financial risk and faster recovery of your "
@@ -2445,7 +2445,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
         f"of ${abs(base_ms-base_a1):,.0f}/year based on your 2024 usage pattern."
     )
 
-    # ── 7. Financial Summary (25 years) ──────────────────────────────────────
+    # ── 7. Financial Summary (20 years) ──────────────────────────────────────
     doc.add_heading(f"7. Financial Summary — {ANALYSIS_YEARS}-Year Horizon", 1)
     doc.add_paragraph(
         f"Annual adjustments over the {ANALYSIS_YEARS}-year horizon: tariffs escalate "
@@ -2458,7 +2458,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
         f"The Nominal Payback is simply when cumulative electricity savings equal the upfront cost. "
         f"The Opp-Cost Payback discounts future savings at {OPPORTUNITY_RATE*100:.0f}%/yr — "
         f"it answers the question: when has the investment returned more than its cost in today's dollars? "
-        f"NPV @ {OPPORTUNITY_RATE*100:.0f}% is the net present value of 25-yr savings at that rate — "
+        f"NPV @ {OPPORTUNITY_RATE*100:.0f}% is the net present value of 20-yr savings at that rate — "
         f"positive means the investment is worthwhile at this hurdle rate."
     )
     pb_rows = []
@@ -2470,12 +2470,12 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
             "Fed Rebate":    f"${pb['fed']:,.0f}",
             "State Rebate":  f"${pb['state']:,.0f}",
             "Net Cost":      f"${pb['net']:,.0f}",
-            "Payback":       f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">25 yr",
+            "Payback":       f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
             f"Opp-Cost Pb\n({OPPORTUNITY_RATE*100:.0f}%/yr)":
-                             f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">25 yr",
+                             f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
             f"NPV @ {OPPORTUNITY_RATE*100:.0f}%":
                              f"${pb['npv']:,.0f}" if pb.get("npv") is not None else "n/a",
-            "25-yr Saving":  f"${pb['total_save']:,.0f}",
+            "20-yr Saving":  f"${pb['total_save']:,.0f}",
             "ROI":           f"{pb['roi']:.0f}%",
             "Yr-1 Saving":   f"${pb['yr1_save']:,.0f}",
         })
@@ -2508,7 +2508,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
             apb = arbit_pbs[0]
             doc.add_paragraph(
                 f"Over {ANALYSIS_YEARS} years, net cost ${apb['net']:,.0f} after rebates. "
-                f"Payback: {'%d years' % apb['pb_yr'] if apb['pb_yr'] else '>25 years'}. "
+                f"Payback: {'%d years' % apb['pb_yr'] if apb['pb_yr'] else '>20 years'}. "
                 f"Total saving: ${apb['total_save']:,.0f}.  ROI: {apb['roi']:.0f}%."
             )
 
@@ -2569,14 +2569,14 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
     for bullet in [
         "Synthetic solar: uses a calibrated sin(elevation) profile, not measured irradiance. "
         "Monthly production can deviate ±10–20% from the model; annual averages are more reliable.",
-        "Single consumption year: 2024 usage pattern applied to all 25 years. Major lifestyle "
+        "Single consumption year: 2024 usage pattern applied to all 20 years. Major lifestyle "
         "changes (EV, pool, household size) will alter actual savings.",
         f"Opportunity cost: the NPV and discounted payback columns use {OPPORTUNITY_RATE*100:.0f}%/yr "
         f"as the hurdle rate. Solar savings are lower-risk than market returns, so this "
         f"is a conservative discount rate.",
-        "No maintenance costs: inverter replacement (~$1,500–3,000 once in 25 years) and "
+        "No maintenance costs: inverter replacement (~$1,500–3,000 once in 20 years) and "
         "cleaning costs are not included.",
-        "Tariff uncertainty: Synergy may restructure tariffs at any time over the 25-year horizon.",
+        "Tariff uncertainty: Synergy may restructure tariffs at any time over the 20-year horizon.",
         "Export limits: single-phase properties are capped at 5 kW inverter export by Western Power.",
     ]:
         doc.add_paragraph(bullet, style="List Bullet")
@@ -2741,7 +2741,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
         f"Based on financial return, the standout option is "
         f"'{best_25['label']}' on the {best_25['tariff']} tariff: "
         f"nominal payback of {best_25['pb_yr']} years, "
-        f"25-year cumulative saving of ${best_25['total_save']:,.0f}, "
+        f"20-year cumulative saving of ${best_25['total_save']:,.0f}, "
         f"and NPV of ${best_25['npv']:,.0f} at {OPPORTUNITY_RATE*100:.0f}%/yr."
     )
     if best_npv["label"] != best_25["label"] or best_npv["tariff"] != best_25["tariff"]:
@@ -2791,7 +2791,7 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
                 "Export\n(kWh/yr)": f"{row['export_kwh']:,.0f}",
                 "Export\nRatio": export_str,
                 "FiT Loss\n($/yr)": f"${row['annual_fit_loss']:,.0f}",
-                "NPV\n(25 yr)": f"${row['npv']:,.0f}",
+                "NPV\n(20 yr)": f"${row['npv']:,.0f}",
                 "NPV per\n$1k invested": f"${row['npv_per_k']:,.0f}",
             })
         tbl_df = pd.DataFrame(tbl_data_rows)
@@ -2799,14 +2799,14 @@ def write_report(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir,
         doc.add_paragraph(
             "Export Ratio = exported kWh ÷ total solar generated. "
             "FiT Loss = value destroyed annually by exporting at 2–10¢ instead of self-consuming at 32¢. "
-            "NPV = cumulative 25-year discounted savings, net of upfront cost. "
+            "NPV = cumulative 20-year discounted savings, net of upfront cost. "
             "NPV per $1k = NPV divided by net capex per $1,000 invested (capital efficiency)."
         ).runs[0].font.size = Pt(7)
 
         bn = sa["best_npv"]
         be = sa["best_eff"]
         doc.add_paragraph(
-            f"Highest absolute NPV: '{bn['label']}' — ${bn['npv']:,.0f} over 25 years, "
+            f"Highest absolute NPV: '{bn['label']}' — ${bn['npv']:,.0f} over 20 years, "
             f"with {bn['self_suf_pct']:.0f}% self-sufficiency and "
             f"{bn['export_ratio']:.0f}% of solar exported."
         )
@@ -2965,7 +2965,7 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
                 "Net Cost = (import kWh × tariff rate) + (supply charge × 365 days) − (export kWh × DEBS rate).  "
                 "Saving = same-tariff baseline minus Net Cost.  "
                 "Self-suf = % of total load met by solar self-consumption + battery discharge (not from grid).\n"
-                "Savings grow in later years as tariff escalation applies — see the 25-year financial table.",
+                "Savings grow in later years as tariff escalation applies — see the 20-year financial table.",
                 ha="center", va="bottom", fontsize=7.5, color="#555555",
                 transform=ax.transAxes)
         pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
@@ -2985,15 +2985,15 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
                 pb["tariff"],
                 f"${pb['cost']:,.0f}",
                 f"${pb['net']:,.0f}",
-                f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">25 yr",
-                f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">25 yr",
+                f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
+                f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
                 f"${pb.get('npv', 0):,.0f}",
                 f"${pb['total_save']:,.0f}",
                 f"{pb['roi']:.0f}%",
             ])
         pb_cols = ["Quote", "Tariff", "Gross\nCost", "Net\nCost",
                    "Nominal\nPayback", f"Opp-Cost\nPayback\n({OPPORTUNITY_RATE*100:.0f}%)",
-                   f"NPV\n@ {OPPORTUNITY_RATE*100:.0f}%", "25-yr\nSaving", "ROI"]
+                   f"NPV\n@ {OPPORTUNITY_RATE*100:.0f}%", "20-yr\nSaving", "ROI"]
         tbl2 = ax.table(cellText=pb_rows, colLabels=pb_cols,
                         loc="center", cellLoc="center")
         tbl2.auto_set_font_size(False); tbl2.set_fontsize(8)
@@ -3004,8 +3004,8 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
                    f"state rebate (${STATE_REBATE_FLAT:,.0f} flat, VPP required).  "
                    f"Nominal Payback = year cumulative savings first equal net cost (no discounting).  "
                    f"Opp-Cost Payback = year discounted savings (at {OPPORTUNITY_RATE*100:.0f}%/yr) first exceed net cost.\n"
-                   f"NPV = net present value of 25-yr savings discounted at {OPPORTUNITY_RATE*100:.0f}%/yr (positive = worthwhile).  "
-                   f"ROI = total 25-yr saving / net cost.\n"
+                   f"NPV = net present value of 20-yr savings discounted at {OPPORTUNITY_RATE*100:.0f}%/yr (positive = worthwhile).  "
+                   f"ROI = total 20-yr saving / net cost.\n"
                    f"Assumptions: tariff escalation {TARIFF_ESC*100:.1f}%/yr; DEBS declining {DEBS_DECL*100:.0f}%/yr; "
                    f"panel degradation {SOL_DEG*100:.2f}%/yr; battery degradation {BAT_DEG*100:.1f}%/yr."),
                 ha="center", va="bottom", fontsize=7, color="#555555",
@@ -3048,7 +3048,7 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
         lines.append(f"Financially strongest option: '{best_25['label']}' on {best_25['tariff']}.")
         lines.append(
             f"  Nominal payback: {best_25['pb_yr']} yr  ·  "
-            f"25-yr saving: {s_best_save}  ·  "
+            f"20-yr saving: {s_best_save}  ·  "
             f"NPV: ${best_25['npv']:,.0f}")
         if best_npv["label"] != best_25["label"] or best_npv["tariff"] != best_25["tariff"]:
             s_npv_save = _t(f"${best_npv['total_save']:,.0f}")
@@ -3142,7 +3142,7 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
             bn = sa["best_npv"]; be = sa["best_eff"]
             summary_lines = [
                 "",
-                f"Best NPV (green): '{bn['label']}'  —  ${bn['npv']:,.0f} over 25 yrs  |  "
+                f"Best NPV (green): '{bn['label']}'  —  ${bn['npv']:,.0f} over 20 yrs  |  "
                 f"{bn['export_ratio']:.0f}% exported  |  {bn['self_suf_pct']:.0f}% self-sufficient",
             ]
             if be["label"] != bn["label"]:
@@ -3266,7 +3266,7 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
              "If the match is good (within ~5%), the projections are reliable for your usage pattern. "
              "Dashed coloured lines show each solar+battery scenario for reference."),
             ("06_payback_analysis.png",
-             "Fig 6 — 25-Year Cumulative Cash-Flow (All Quotes)",
+             "Fig 6 — 20-Year Cumulative Cash-Flow (All Quotes)",
              "Each line's starting point (negative y-axis) = net system cost after rebates. "
              "The line rises each year as annual savings accumulate. "
              "When a line crosses y = 0 (the horizontal black line), that is the payback year — "
@@ -3410,7 +3410,7 @@ def write_pdf_report(all_res, pbs, raw_df, opt_kw, out_dir,
             ("Limitations and what is not modelled",
              "No NPV or discount rate — all figures are nominal AUD. No maintenance costs (inverter replacement, "
              "cleaning). No allowance for financing costs or cost of capital. "
-             "Single year of consumption data applied across all 25 years. "
+             "Single year of consumption data applied across all 20 years. "
              "Western Power single-phase export limit (5 kW) not enforced — confirm with installer. "
              "STC solar rebate assumed already reflected in installer's gross quoted price."),
         ]

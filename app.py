@@ -5,7 +5,9 @@ Run with:  streamlit run app.py
 """
 import sys, os
 import io
+import re
 import warnings
+import urllib.request
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -31,6 +33,37 @@ from solar_battery_analyser import (
 )
 
 _QUOTES_PATH = _QUOTES_FILE
+
+
+@st.cache_data(ttl=43200, show_spinner=False)   # refresh every 12 hours
+def fetch_stc_price() -> tuple[float, str]:
+    """Try to scrape the current STC spot price from Ecovantage.
+    Returns (price_inc_gst, source_label).
+    Falls back to the hardcoded STC_PRICE constant on any failure.
+    """
+    try:
+        url = "https://www.ecovantage.com.au/energy-certificate-market-update/"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        # Look for a dollar amount near "STC" within a short window of text
+        # Pattern: STC ... $XX.XX  or  $XX.XX ... STC
+        m = re.search(
+            r'STC[^$]{0,120}\$\s*(\d{1,2}(?:\.\d{1,2})?)',
+            html, re.IGNORECASE
+        )
+        if not m:
+            m = re.search(
+                r'\$\s*(\d{1,2}(?:\.\d{1,2})?)[^$]{0,120}STC',
+                html, re.IGNORECASE
+            )
+        if m:
+            price = float(m.group(1))
+            if 15.0 <= price <= 45.0:   # sanity bounds
+                return price, "Ecovantage (live)"
+    except Exception:
+        pass
+    return float(STC_PRICE), "default (no live data)"
 
 
 def add_solar_shaded(raw_df: pd.DataFrame, solar_kw: float,
@@ -574,12 +607,13 @@ with st.sidebar:
 
     st.divider()
     st.subheader("4. STC price")
+    _live_stc, _stc_source = fetch_stc_price()
     st.caption(
-        "Small-scale Technology Certificate spot price (inc GST). "
-        "Fluctuates daily; clearing-house max is $40 ex-GST (~$44 inc GST). "
-        "Check [STC prices](https://www.rec-registry.gov.au) for the current rate."
+        f"Small-scale Technology Certificate spot price (inc GST). "
+        f"Default loaded from: **{_stc_source}**. "
+        f"Clearing-house max is $40 ex-GST (~$44 inc GST)."
     )
-    stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, float(STC_PRICE), 0.50)
+    stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, _live_stc, 0.50)
 
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
@@ -662,11 +696,11 @@ def metric_col(col, res, pb, cfg, bl, colour):
         )
         r1, r2, r3 = st.columns(3)
         r1.metric("Annual saving", f"${annual_saving:,.0f}")
-        r2.metric("Nominal payback", f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">25 yr")
+        r2.metric("Nominal payback", f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr")
         r3.metric("NPV @ 8%", f"${pb['npv']:,.0f}")
 
         r4, r5, r6 = st.columns(3)
-        r4.metric("25-yr saving", f"${pb['total_save']:,.0f}")
+        r4.metric("20-yr saving", f"${pb['total_save']:,.0f}")
         r5.metric("ROI", f"{pb['roi']:.0f}%")
         r6.metric("Self-sufficiency", f"{res['self_suf_pct']:.0f}%")
 
@@ -724,11 +758,11 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
         "  – WA battery rebate": f"-${pb.get('state', 0):,.0f}",
         "  – Federal battery rebate": f"-${pb.get('fed', 0):,.0f}",
         "Purchase price (net)": f"${pb['net']:,.0f}",
-        "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">25 yr",
+        "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
         f"Opp-cost payback ({OPPORTUNITY_RATE*100:.0f}%)":
-            f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">25 yr",
+            f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
         f"NPV @ {OPPORTUNITY_RATE*100:.0f}%": f"${pb['npv']:,.0f}",
-        "25-yr saving": f"${pb['total_save']:,.0f}",
+        "20-yr saving": f"${pb['total_save']:,.0f}",
         "ROI": f"{pb['roi']:.0f}%",
         "Year-1 saving": f"${pb['yr1_save']:,.0f}",
     })
