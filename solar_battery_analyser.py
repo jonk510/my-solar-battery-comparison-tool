@@ -567,46 +567,75 @@ def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0):
     load_arr  = df["consumption_kwh"].values
     slot_arr  = df["slot"].values
 
-    # ── Battery dispatch logic (tariff-aware, runs per 30-min interval):
+    # ── Battery dispatch — 3-zone price-aware strategy ──────────────────────
     #
-    # A1 Flat — greedy: discharge battery whenever load > solar (all hours same cost).
+    # A1 Flat: all hours cost the same → greedy is optimal.
     #
-    # Midday Saver — price-aware to maximise value of stored energy:
-    #   Super off-peak 9am–3pm (slots 18–30): grid costs only 8.6¢/kWh.
-    #     → Solar surplus charges battery as normal.
-    #     → When load > solar, buy cheap grid; do NOT discharge battery.
-    #       Reserving charge for the expensive peak is worth ~44¢/kWh more.
-    #   Peak 3pm–9pm (slots 30–42): grid costs 53.8¢/kWh.
-    #     → Discharge battery first; only import from grid when battery is empty.
-    #   Off-peak overnight (other slots): grid costs 22.2¢/kWh.
-    #     → Discharge battery normally to cover overnight load.
+    # Midday Saver has 3 rate zones:
+    #   SOP  (9am–3pm,  slots 18–30):  8.6¢  ← cheapest
+    #   Peak (3pm–9pm,  slots 30–42): 53.8¢  ← most expensive
+    #   Off-peak (rest, slots 0–18, 42–48): 22.2¢
+    #
+    # Optimal rules:
+    #   SOP  → charge battery from solar first; top up from grid to full
+    #          (buying at 8.6¢ to displace 53.8¢ peak → ~44¢/kWh net saving).
+    #          Never discharge the battery (grid is cheaper right now).
+    #   Peak → discharge battery first; grid only when battery exhausted.
+    #   Off-peak → discharge battery; grid if empty.
+    #          Don't charge from grid — wait for next SOP at 8.6¢.
 
-    ms_sop = (tariff != "A1 Flat")  # flag: apply SOP hold-back logic
+    ms_tariff = (tariff != "A1 Flat")
+    if ms_tariff:
+        slots_int = slot_arr.astype(int)
+        is_sop    = (slots_int >= 18) & (slots_int < 30)
 
     for i in range(n):
         load  = load_arr[i]
         solar = solar_arr[i]
-        slot  = int(slot_arr[i])
         net   = solar - load
-        if net >= 0:
-            # Solar surplus: charge battery from surplus, export the rest
-            s_slf[i] = load
-            chg = min(net, max_chg*0.5, (usable-soc)/BAT_RTE**0.5)
-            soc = min(soc + chg*BAT_RTE**0.5, usable)
-            g_exp[i] = max(0, net - chg)
-            b_chg[i] = chg
-        else:
-            # Load > solar
-            s_slf[i] = solar
-            if ms_sop and (18 <= slot < 30):
-                # Super off-peak: grid is cheapest — buy from grid, save battery for peak
-                g_imp[i] = -net
+
+        if not ms_tariff:
+            # ── A1 Flat: greedy dispatch ──────────────────────────────────────
+            if net >= 0:
+                s_slf[i] = load
+                chg = min(net, max_chg*0.5, (usable-soc)/BAT_RTE**0.5)
+                soc = min(soc + chg*BAT_RTE**0.5, usable)
+                g_exp[i] = max(0, net - chg)
+                b_chg[i] = chg
             else:
-                # Peak or off-peak: discharge battery first, grid only if battery empty
+                s_slf[i] = solar
                 dis = min(-net, inv_kw*0.5, soc)
                 soc = max(0, soc - dis)
                 g_imp[i] = max(0, -net - dis*BAT_RTE**0.5)
                 b_dis[i] = dis
+
+        else:
+            # ── Midday Saver: price-aware dispatch ────────────────────────────
+            s_slf[i]  = min(solar, load)
+            surplus   = max(0.0,  net)
+            shortfall = max(0.0, -net)
+
+            # Step 1 — always charge from any solar surplus first
+            solar_chg = min(surplus, max_chg*0.5, (usable - soc)/BAT_RTE**0.5)
+            soc      += solar_chg * BAT_RTE**0.5
+            b_chg[i]  = solar_chg
+            g_exp[i]  = surplus - solar_chg     # uncaptured solar exports to grid
+
+            # Step 2 — handle load shortfall + possible grid top-up
+            if is_sop[i]:
+                # SOP: buy grid for load shortfall; also charge battery to full from grid
+                room      = (usable - soc) / BAT_RTE**0.5
+                grid_chg  = min(room, max(0.0, inv_kw*0.5 - solar_chg))
+                soc       = min(soc + grid_chg * BAT_RTE**0.5, usable)
+                b_chg[i] += grid_chg
+                g_imp[i]  = shortfall + grid_chg
+            else:
+                # Peak or off-peak: discharge battery first, grid as last resort
+                dis = min(shortfall, inv_kw*0.5, soc)
+                soc = max(0, soc - dis)
+                g_imp[i]  = max(0, shortfall - dis*BAT_RTE**0.5)
+                b_dis[i]  = dis
+
         soc_a[i] = soc
 
     df = df.copy()
