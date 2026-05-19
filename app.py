@@ -26,8 +26,10 @@ from solar_battery_analyser import (
     TARIFF_ESC, DEBS_DECL,
     BAT_DOD, BAT_RTE, BAT_DEG, SOL_DEG, SYS_EFF,
     ms_rate, debs_rate, _monthly_net,
-    CS,
+    CS, _QUOTES_FILE,
 )
+
+_QUOTES_PATH = _QUOTES_FILE
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -366,34 +368,74 @@ with st.sidebar:
                 raw_df = None
 
     st.divider()
-    st.subheader("2. Configure options")
+    st.subheader("2. Select quotes")
 
-    TARIFFS = ["A1 Flat", "Midday Saver"]
+    # ── Load quotes from xlsx ─────────────────────────────────────────────────
+    quotes_df = None
+    if _QUOTES_PATH.exists():
+        try:
+            quotes_df = pd.read_excel(_QUOTES_PATH)
+            quotes_df.columns = quotes_df.columns.str.strip()
+            if "Quote" in quotes_df.columns:
+                quotes_df = quotes_df.sort_values("Quote").reset_index(drop=True)
+            # Filter out base-case rows for the comparison selector
+            solar_quotes = quotes_df[
+                ~((quotes_df["Solar_kW"] == 0) &
+                  (quotes_df["Battery_kWh"] == 0))
+            ].reset_index(drop=True)
+        except Exception as e:
+            st.warning(f"Could not load quotes file: {e}")
+            solar_quotes = None
+    else:
+        st.warning(
+            "`solar_battery_quotes.xlsx` not found in the app folder. "
+            "Add it to the repository to enable quote selection."
+        )
+        solar_quotes = None
 
-    def option_form(tag: str, default_solar, default_bat, default_inv,
-                    default_cost, default_tariff, default_label):
-        with st.expander(f"Option {tag}", expanded=True):
-            label  = st.text_input(f"Label {tag}", value=default_label, key=f"lbl_{tag}")
-            solar  = st.number_input(f"Solar array (kW)", min_value=0.0, max_value=30.0,
-                                     value=float(default_solar), step=0.5, key=f"sol_{tag}")
-            bat    = st.number_input(f"Battery (kWh)", min_value=0.0, max_value=60.0,
-                                     value=float(default_bat), step=0.5, key=f"bat_{tag}")
-            inv    = st.number_input(f"Inverter (kW)", min_value=0.0, max_value=15.0,
-                                     value=float(default_inv), step=0.5, key=f"inv_{tag}")
-            cost   = st.number_input(f"Gross cost ($)", min_value=0, max_value=100_000,
-                                     value=int(default_cost), step=500, key=f"cost_{tag}")
-            tariff = st.selectbox(f"Tariff", TARIFFS,
-                                  index=TARIFFS.index(default_tariff), key=f"tariff_{tag}")
+    TARIFFS = ["Midday Saver", "A1 Flat"]
+
+    def option_selector(tag: str, default_idx: int):
+        colour = "#e8463a" if tag == "A" else "#0f9d58"
+        st.markdown(
+            f"<span style='border-left:4px solid {colour};"
+            f"padding-left:6px;font-weight:bold'>Option {tag}</span>",
+            unsafe_allow_html=True,
+        )
+        if solar_quotes is not None and len(solar_quotes) > 0:
+            labels   = solar_quotes["Vendor"].tolist()
+            sel_idx  = st.selectbox(
+                "Quote", range(len(labels)),
+                format_func=lambda i: labels[i],
+                index=min(default_idx, len(labels) - 1),
+                key=f"quote_{tag}",
+            )
+            row = solar_quotes.iloc[sel_idx]
+            solar = float(row["Solar_kW"])
+            bat   = float(row["Battery_kWh"])
+            inv   = float(row["Inverter_kW"])
+            cost  = int(row["Cost_AUD"])
+            label = str(row["Vendor"])
+            # Show details read-only
+            st.caption(
+                f"☀️ {solar} kW solar  ·  🔋 {bat} kWh battery  ·  "
+                f"⚡ {inv} kW inverter  ·  💰 ${cost:,}"
+            )
+        else:
+            # Fallback to manual entry if no quotes file
+            label = st.text_input("Label", key=f"lbl_{tag}",
+                                  value="Option A" if tag == "A" else "Option B")
+            solar = st.number_input("Solar (kW)", 0.0, 30.0, 6.6, 0.5, key=f"sol_{tag}")
+            bat   = st.number_input("Battery (kWh)", 0.0, 60.0, 16.0, 0.5, key=f"bat_{tag}")
+            inv   = st.number_input("Inverter (kW)", 0.0, 15.0, 10.0, 0.5, key=f"inv_{tag}")
+            cost  = st.number_input("Gross cost ($)", 0, 100_000, 20_000, 500, key=f"cost_{tag}")
+
+        tariff = st.selectbox("Tariff", TARIFFS, key=f"tariff_{tag}")
+        st.markdown("")
         return dict(label=label, solar=solar, bat=bat, inv=inv, cost=cost, tariff=tariff)
 
-    cfg_a = option_form("A",
-        default_solar=12.3, default_bat=16.0, default_inv=10.0,
-        default_cost=25_180, default_tariff="Midday Saver",
-        default_label="12.3 kW + 16 kWh battery")
-    cfg_b = option_form("B",
-        default_solar=6.3, default_bat=26.3, default_inv=10.0,
-        default_cost=25_280, default_tariff="Midday Saver",
-        default_label="6.3 kW + 26.3 kWh battery")
+    cfg_a = option_selector("A", default_idx=0)
+    cfg_b = option_selector("B", default_idx=1)
 
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 

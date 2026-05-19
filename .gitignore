@@ -4,6 +4,9 @@
 *.csv
 *.tsv
 
+# Exception: quotes file is part of the app and must be committed
+!solar_battery_quotes.xlsx
+
 # Generated outputs
 results/
 *.docx

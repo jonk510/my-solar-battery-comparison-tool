@@ -33,19 +33,46 @@ DEFAULT_DATA_PATH = "/Users/jonathanking/Python/solar_analysis_output/MyHalfHour
 # Enter the GROSS installed price (before rebates) — code deducts rebates automatically.
 # STC solar rebate is usually already in the installer's quoted price, so don't add it back.
 
-# ─── QUOTES (label, solar_kW, battery_kWh, inverter_kW, total_cost_AUD) ─────
-# IMPORTANT: total_cost_AUD must be the GROSS installed price BEFORE deducting
-# the federal battery rebate and state battery rebate. The code deducts both
-# automatically. STC solar rebates are typically already applied upfront by the
-# installer, so the price you enter should already reflect that discount.
-QUOTES = [
-    ("Base Case — Grid Only",            0.0,   0.0,  0.0,      0),  # current situation, no solar/battery
-    ("12.32 kW Solar + 16 kWh Battery", 12.3,  16.0, 10.0, 25_180),
-    ("6.6 kW Solar + 26.3 kWh Battery",  6.3,  26.3, 10.0, 25_280),
-    ("6.6 kW Solar + 17.5 kWh Battery",  6.3,  17.5, 10.0, 21_370),
-    #("12 kW Solar + 14 kWh Battery",  12.0,  14.0,  10.0, 18_490),
-    
-]
+# ─── QUOTES — loaded from solar_battery_quotes.xlsx in the same folder ───────
+# Columns required: Vendor, Solar_kW, Battery_kWh, Inverter_kW, Cost_AUD
+# total_cost_AUD must be the GROSS installed price BEFORE deducting rebates.
+# The code deducts the federal battery rebate and state battery rebate automatically.
+# STC solar rebates are typically already applied upfront by the installer.
+
+_QUOTES_FILE = Path(__file__).parent / "solar_battery_quotes.xlsx"
+
+
+def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
+    """Read quotes from an xlsx file and return a list of 5-tuples
+    (label, solar_kW, battery_kWh, inverter_kW, cost_AUD).
+    Returns an empty list and prints a warning if the file is not found.
+    """
+    if not path.exists():
+        print(f"  ⚠  Quotes file not found: {path}\n"
+              f"     Create solar_battery_quotes.xlsx in the same folder.")
+        return []
+    try:
+        df = pd.read_excel(path)
+        df.columns = df.columns.str.strip()
+        required = {"Vendor", "Solar_kW", "Battery_kWh", "Inverter_kW", "Cost_AUD"}
+        missing  = required - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing columns in quotes file: {missing}")
+        df = df.sort_values("Quote") if "Quote" in df.columns else df
+        return [
+            (str(row["Vendor"]),
+             float(row["Solar_kW"]),
+             float(row["Battery_kWh"]),
+             float(row["Inverter_kW"]),
+             float(row["Cost_AUD"]))
+            for _, row in df.iterrows()
+        ]
+    except Exception as exc:
+        print(f"  ⚠  Could not load quotes file: {exc}")
+        return []
+
+
+QUOTES = load_quotes_from_file()
 
 
 # ─── ANALYSIS HORIZON ────────────────────────────────────────────────────────
