@@ -258,7 +258,7 @@ def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b
         (res_b,    costs_b,    OPTION_COLOURS[1], f"Option B: {cfg_b['label']}"),
     ]
 
-    fig, axes = plt.subplots(4, 3, figsize=(18, 18), sharey=False)
+    fig, axes = plt.subplots(4, 3, figsize=(18, 18), sharey="row")
     fig.patch.set_facecolor("white")
 
     for col_idx, (res, costs, col, col_lbl) in enumerate(col_configs):
