@@ -176,9 +176,11 @@ def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
 
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
-                   shade_summer, shade_autumn, shade_winter, stc_price, _raw_df):
+                   shade_summer, shade_autumn, shade_winter, stc_price, rebates_included,
+                   _raw_df):
     df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
-    return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=stc_price)
+    return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
+                   stc_price=stc_price, rebates_included=rebates_included)
 
 
 @st.cache_data(show_spinner=False)
@@ -529,6 +531,11 @@ with st.sidebar:
                 (cols[lc] for lc in cols if any(k in lc for k in ["quote", "number", "order"])),
                 None,
             )
+            # Optional: column indicating whether the quoted price already includes rebates
+            try:
+                col_rebates_inc = _fc(["rebate", "include", "already"])
+            except ValueError:
+                col_rebates_inc = None
 
             if col_order:
                 quotes_df = quotes_df.sort_values(col_order)
@@ -541,6 +548,16 @@ with st.sidebar:
                 col_inverter: "Inverter_kW",
                 col_cost:     "Cost_AUD",
             }).reset_index(drop=True)
+
+            # Parse the rebates-included flag (Yes/No → bool), default False
+            if col_rebates_inc:
+                quotes_df["Rebates_Included"] = (
+                    quotes_df[col_rebates_inc]
+                    .astype(str).str.strip().str.lower()
+                    .isin(["yes", "y", "true", "1"])
+                )
+            else:
+                quotes_df["Rebates_Included"] = False
 
             # Filter out base-case rows (solar=0 and battery=0)
             solar_quotes = quotes_df[
@@ -568,20 +585,23 @@ with st.sidebar:
         if solar_quotes is not None and len(solar_quotes) > 0:
             def _fmt(i):
                 r = solar_quotes.iloc[i]
+                price_tag = "net, rebates incl." if r.get("Rebates_Included", False) else "gross"
                 return (f"{r['Vendor']}  —  {r['Solar_kW']:.2g} kW solar / "
-                        f"{r['Battery_kWh']:.4g} kWh battery  (${int(r['Cost_AUD']):,})")
+                        f"{r['Battery_kWh']:.4g} kWh battery  "
+                        f"(${int(r['Cost_AUD']):,} {price_tag})")
             sel_idx = st.selectbox(
                 "Quote", range(len(solar_quotes)),
                 format_func=_fmt,
                 index=min(default_idx, len(solar_quotes) - 1),
                 key=f"quote_{tag}",
             )
-            row   = solar_quotes.iloc[sel_idx]
-            solar = float(row["Solar_kW"])
-            bat   = float(row["Battery_kWh"])
-            inv   = float(row["Inverter_kW"])
-            cost  = int(row["Cost_AUD"])
-            label = _fmt(sel_idx)
+            row          = solar_quotes.iloc[sel_idx]
+            solar        = float(row["Solar_kW"])
+            bat          = float(row["Battery_kWh"])
+            inv          = float(row["Inverter_kW"])
+            cost         = int(row["Cost_AUD"])
+            rebates_inc  = bool(row.get("Rebates_Included", False))
+            label        = _fmt(sel_idx)
         else:
             # Fallback to manual entry if no quotes file
             label = st.text_input("Label", key=f"lbl_{tag}",
@@ -590,10 +610,12 @@ with st.sidebar:
             bat   = st.number_input("Battery (kWh)", 0.0, 60.0, 16.0, 0.5, key=f"bat_{tag}")
             inv   = st.number_input("Inverter (kW)", 0.0, 15.0, 10.0, 0.5, key=f"inv_{tag}")
             cost  = st.number_input("Gross cost ($)", 0, 100_000, 20_000, 500, key=f"cost_{tag}")
+            rebates_inc = False
 
         tariff = st.selectbox("Tariff", TARIFFS, key=f"tariff_{tag}")
         st.markdown("")
-        return dict(label=label, solar=solar, bat=bat, inv=inv, cost=cost, tariff=tariff)
+        return dict(label=label, solar=solar, bat=bat, inv=inv, cost=cost,
+                    tariff=tariff, rebates_inc=rebates_inc)
 
     cfg_a = option_selector("A", default_idx=0)
     cfg_b = option_selector("B", default_idx=1)
@@ -651,12 +673,12 @@ with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
-        *shading, stc_price, raw_df,
+        *shading, stc_price, cfg_a["rebates_inc"], raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
-        *shading, stc_price, raw_df,
+        *shading, stc_price, cfg_b["rebates_inc"], raw_df,
     )
 
 with st.spinner("Computing status quo…"):
@@ -750,13 +772,14 @@ plt.close(fig_pb)
 # Payback detail table
 pb_rows = []
 for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
+    inc = cfg.get("rebates_inc", False)
     pb_rows.append({
         "Option": f"{tag}: {cfg['label']}",
         "Tariff": cfg["tariff"],
-        "Retail price (gross)": f"${cfg['cost']:,.0f}",
-        "  – STC solar rebate": f"-${pb.get('stc', 0):,.0f}",
-        "  – WA battery rebate": f"-${pb.get('state', 0):,.0f}",
-        "  – Federal battery rebate": f"-${pb.get('fed', 0):,.0f}",
+        "Quoted price": f"${cfg['cost']:,.0f} ({'net — rebates already included' if inc else 'gross — rebates extra'})",
+        "  – STC solar rebate": "included in quote" if inc else f"-${pb.get('stc', 0):,.0f}",
+        "  – WA battery rebate": "included in quote" if inc else f"-${pb.get('state', 0):,.0f}",
+        "  – Federal battery rebate": "included in quote" if inc else f"-${pb.get('fed', 0):,.0f}",
         "Purchase price (net)": f"${pb['net']:,.0f}",
         "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
         f"Opp-cost payback ({OPPORTUNITY_RATE*100:.0f}%)":

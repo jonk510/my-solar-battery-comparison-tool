@@ -751,17 +751,23 @@ def baseline(df, tariff):
     return (load * np.vectorize(ms_rate)(slots.astype(int))).sum() + MS_SUPPLY*n_days
 
 
-def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label, stc_price=STC_PRICE):
+def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
+            stc_price=STC_PRICE, rebates_included=False):
     # ── 20-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
-    # Years 1–25: solar+battery output degrades slightly each year
+    # Years 1–20: solar+battery output degrades slightly each year
     #             electricity prices rise at TARIFF_ESC % per year
     #             annual saving = (baseline cost that year) - (modelled cost that year)
     # Payback year = first year where cumulative savings exceed upfront cost
-    stc   = solar_stc_rebate(solar_kw, stc_price)
-    fed   = min(fed_battery_rebate(bat_kwh), cost * 0.4)
-    state = STATE_REBATE_FLAT if bat_kwh > 0 else 0
-    net   = max(0, cost - stc - fed - state)
+    if rebates_included:
+        # Quoted price already net of all rebates — use as-is
+        stc, fed, state = 0.0, 0.0, 0.0
+        net = float(cost)
+    else:
+        stc   = solar_stc_rebate(solar_kw, stc_price)
+        fed   = min(fed_battery_rebate(bat_kwh), cost * 0.4)
+        state = STATE_REBATE_FLAT if bat_kwh > 0 else 0
+        net   = max(0, cost - stc - fed - state)
     base = baseline(df, tariff)
 
     savings=[]; net_costs=[]; cum=[-net]; cum_disc=[-net]
