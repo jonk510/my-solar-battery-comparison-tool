@@ -476,6 +476,97 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
     return fig
 
 
+def make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b) -> plt.Figure:
+    """4×2 grid: rows = seasons, cols = [Option A | Option B].
+    Shows the typical average battery state of charge over the day per season."""
+    options = [
+        (res_a, cfg_a, OPTION_COLOURS[0], "A"),
+        (res_b, cfg_b, OPTION_COLOURS[1], "B"),
+    ]
+
+    fig, axes = plt.subplots(4, 2, figsize=(12, 16), sharey=False)
+    fig.patch.set_facecolor("white")
+
+    for col_idx, (res, cfg, col, tag) in enumerate(options):
+        df = res["df"].copy()
+        df["month"] = df["datetime"].dt.month
+        bat_usable = cfg["bat"] * BAT_DOD
+
+        for row_idx, (season, months) in enumerate(SEASON_MONTHS.items()):
+            ax = axes[row_idx][col_idx]
+            sub = df[df["month"].isin(months)]
+
+            if sub.empty:
+                ax.set_visible(False)
+                continue
+
+            avg_soc = sub.groupby("slot")["soc"].mean()
+            h = avg_soc.index / 2
+
+            ax.fill_between(h, avg_soc.values, alpha=0.35, color=col)
+            ax.plot(h, avg_soc.values, color=col, lw=2.0, label="Avg SoC")
+
+            if bat_usable > 0:
+                ax.axhline(bat_usable, color="gray", lw=0.9, ls="--",
+                           label=f"Max usable ({bat_usable:.1f} kWh)")
+                ax.set_ylim(0, bat_usable * 1.15)
+                avg_val = float(avg_soc.mean())
+                avg_pct = avg_val / bat_usable * 100
+                ax.text(0.98, 0.97, f"Avg SoC: {avg_val:.1f} kWh ({avg_pct:.0f}%)",
+                        transform=ax.transAxes, ha="right", va="top", fontsize=7,
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                  ec=col, alpha=0.85, lw=1.0))
+            else:
+                ax.set_ylim(0, 1)
+                ax.text(0.5, 0.5, "No battery configured", transform=ax.transAxes,
+                        ha="center", va="center", fontsize=9, color="gray")
+
+            ax.axvspan(15, 21, alpha=0.07, color="red")
+            ax.axvspan(9, 15, alpha=0.06, color="green")
+            ax.set_xlim(0, 24)
+            ax.set_xticks(range(0, 25, 6))
+            ax.set_xticklabels([f"{hh:02d}h" for hh in range(0, 25, 6)], fontsize=7)
+            ax.tick_params(axis="y", labelsize=7)
+
+            if row_idx == 0:
+                ax.set_title(f"Option {tag}: {cfg['label']}", fontsize=9,
+                             fontweight="bold", color=col)
+            if col_idx == 0:
+                ax.set_ylabel(f"{season}\nSoC (kWh)", fontsize=7.5, fontweight="bold")
+            else:
+                ax.set_ylabel("SoC (kWh)", fontsize=7)
+
+    handles, labels_ = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels_, loc="lower center", ncol=2, fontsize=8,
+               bbox_to_anchor=(0.5, -0.005))
+    fig.suptitle("Typical Battery State of Charge by Season",
+                 fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=[0, 0.03, 1, 0.98])
+    return fig
+
+
+def make_seasonal_energy_table(res_a, res_b) -> pd.DataFrame:
+    """Avg daily consumption and solar kWh per season for Option A and Option B."""
+    rows = []
+    for season, months in SEASON_MONTHS.items():
+        row: dict = {"Season": season}
+        for res, tag in [(res_a, "A"), (res_b, "B")]:
+            df = res["df"].copy()
+            df["month"] = df["datetime"].dt.month
+            sub = df[df["month"].isin(months)]
+            if sub.empty:
+                if tag == "A":
+                    row["Avg Daily Consumption (kWh)"] = None
+                row[f"Option {tag} Avg Daily Solar (kWh)"] = None
+            else:
+                daily = sub.groupby("date")[["consumption_kwh", "solar_kwh"]].sum()
+                if tag == "A":
+                    row["Avg Daily Consumption (kWh)"] = round(daily["consumption_kwh"].mean(), 1)
+                row[f"Option {tag} Avg Daily Solar (kWh)"] = round(daily["solar_kwh"].mean(), 1)
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("Season")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — upload + configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -759,6 +850,33 @@ with st.spinner("Generating seasonal charts…"):
     fig_seasonal = make_seasonal_fig(res_base, res_a, res_b, cfg_base, cfg_a, cfg_b)
 st.pyplot(fig_seasonal, use_container_width=True)
 plt.close(fig_seasonal)
+
+# ── Battery state of charge by season ────────────────────────────────────────
+st.divider()
+st.subheader("Battery State of Charge — Typical Day by Season")
+st.caption(
+    "Average battery SoC (kWh) over the day for each option and season. "
+    "Dashed line = maximum usable capacity (nameplate × DoD). "
+    "Green shading = super off-peak charge window (9am–3pm), red = peak discharge window (3–9pm)."
+)
+with st.spinner("Generating SoC charts…"):
+    fig_soc = make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b)
+st.pyplot(fig_soc, use_container_width=True)
+plt.close(fig_soc)
+
+# ── Seasonal energy summary table ─────────────────────────────────────────────
+st.divider()
+st.subheader("Seasonal Energy Summary — Average Daily kWh")
+st.caption(
+    "Average daily totals across all days in each season from your meter data. "
+    "Consumption is the same for both options (from your meter). "
+    "Solar generation differs because the two options have different panel sizes."
+)
+tbl = make_seasonal_energy_table(res_a, res_b)
+st.dataframe(
+    tbl.style.format("{:.1f}", na_rep="—"),
+    use_container_width=True,
+)
 
 # ── Payback / cashflow ────────────────────────────────────────────────────────
 st.divider()
