@@ -344,6 +344,38 @@ def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b
     return fig
 
 
+def make_total_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """Cumulative total spend: upfront cost + ongoing bills for each option vs base case."""
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    fig.patch.set_facecolor("white")
+    yrs = list(range(ANALYSIS_YEARS + 1))
+
+    # Base case: no solar — accumulate annual bills
+    base_spend = [0]
+    for yr in range(1, ANALYSIS_YEARS + 1):
+        base_yr = pb_a["savings"][yr - 1] + pb_a["net_costs"][yr - 1]
+        base_spend.append(base_spend[-1] + base_yr)
+    ax.plot(yrs, base_spend, color="gray", lw=1.5, ls="--", label="No solar/battery (bills only)")
+
+    for pb, cfg, col in [(pb_a, cfg_a, OPTION_COLOURS[0]),
+                          (pb_b, cfg_b, OPTION_COLOURS[1])]:
+        spend = [pb["net"]]
+        for yr in range(1, ANALYSIS_YEARS + 1):
+            spend.append(spend[-1] + pb["net_costs"][yr - 1])
+        lbl = f"Option {'A' if col == OPTION_COLOURS[0] else 'B'}: {cfg['label']} ({cfg['tariff']})"
+        ax.plot(yrs, spend, color=col, lw=2.0, label=lbl)
+
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Cumulative Total Spend (AUD)")
+    ax.set_title(f"Cumulative Total Spend — {ANALYSIS_YEARS}-Year Horizon")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def make_payback_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
     """Side-by-side cumulative cashflow for the two options."""
     fig, ax = plt.subplots(figsize=(11, 4.5))
@@ -722,8 +754,8 @@ with st.sidebar:
     st.subheader("3. Site shading")
     st.caption("Fraction of unshaded solar reaching the panels each season.")
     shade_summer  = st.slider("Summer shading (Dec–Feb)",  0.0, 1.0, 0.60, 0.05)
-    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.50, 0.05)
-    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.40, 0.05)
+    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.40, 0.05)
+    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.20, 0.05)
 
     st.divider()
     st.subheader("4. STC price")
@@ -893,6 +925,12 @@ with st.spinner("Generating payback chart…"):
     fig_pb = make_payback_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_pb, use_container_width=True)
 plt.close(fig_pb)
+
+st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Total Spend")
+with st.spinner("Generating total spend chart…"):
+    fig_ts = make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b)
+st.pyplot(fig_ts, use_container_width=True)
+plt.close(fig_ts)
 
 # Payback detail table
 pb_rows = []
