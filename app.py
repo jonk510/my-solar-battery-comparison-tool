@@ -350,6 +350,13 @@ def make_payback_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Fi
     fig.patch.set_facecolor("white")
     yrs = list(range(ANALYSIS_YEARS + 1))
 
+    # Base case: no solar/battery — cumulative bills starting from $0
+    base_cum = [0]
+    for yr in range(1, ANALYSIS_YEARS + 1):
+        base_yr = pb_a["savings"][yr - 1] + pb_a["net_costs"][yr - 1]
+        base_cum.append(base_cum[-1] - base_yr)
+    ax.plot(yrs, base_cum, color="gray", lw=1.5, ls="--", label="No solar/battery (cumulative bills)")
+
     for pb, cfg, col in [(pb_a, cfg_a, OPTION_COLOURS[0]),
                           (pb_b, cfg_b, OPTION_COLOURS[1])]:
         lbl = f"Option {'A' if col == OPTION_COLOURS[0] else 'B'}: {cfg['label']} ({cfg['tariff']})"
