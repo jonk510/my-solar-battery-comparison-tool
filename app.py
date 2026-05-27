@@ -376,6 +376,42 @@ def make_total_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> pl
     return fig
 
 
+def make_pv_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """Total spend discounted to present value at OPPORTUNITY_RATE.
+    Bills escalate at TARIFF_ESC but future dollars are discounted back — more realistic view."""
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    fig.patch.set_facecolor("white")
+    yrs = list(range(ANALYSIS_YEARS + 1))
+
+    # Base case: PV of cumulative bills (bills already escalate via savings+net_costs)
+    base_pv = [0]
+    for yr in range(1, ANALYSIS_YEARS + 1):
+        base_yr = pb_a["savings"][yr - 1] + pb_a["net_costs"][yr - 1]
+        base_pv.append(base_pv[-1] + base_yr / (1 + OPPORTUNITY_RATE) ** yr)
+    ax.plot(yrs, base_pv, color="gray", lw=1.5, ls="--", label="No solar/battery (bills only)")
+
+    for pb, cfg, col in [(pb_a, cfg_a, OPTION_COLOURS[0]),
+                          (pb_b, cfg_b, OPTION_COLOURS[1])]:
+        pv_spend = [pb["net"]]  # upfront cost is today — no discounting
+        for yr in range(1, ANALYSIS_YEARS + 1):
+            pv_spend.append(pv_spend[-1] + pb["net_costs"][yr - 1] / (1 + OPPORTUNITY_RATE) ** yr)
+        lbl = f"Option {'A' if col == OPTION_COLOURS[0] else 'B'}: {cfg['label']} ({cfg['tariff']})"
+        ax.plot(yrs, pv_spend, color=col, lw=2.0, label=lbl)
+
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Cumulative Spend — Present Value (AUD)")
+    ax.set_title(
+        f"Cumulative Total Spend (Inflation-Adjusted @ {OPPORTUNITY_RATE*100:.0f}% discount) "
+        f"— {ANALYSIS_YEARS}-Year Horizon"
+    )
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def make_payback_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
     """Side-by-side cumulative cashflow for the two options."""
     fig, ax = plt.subplots(figsize=(11, 4.5))
@@ -931,6 +967,16 @@ with st.spinner("Generating total spend chart…"):
     fig_ts = make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_ts, use_container_width=True)
 plt.close(fig_ts)
+
+st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Total Spend (Inflation-Adjusted)")
+st.caption(
+    f"Same as above but future bills and ongoing costs are discounted to today's dollars "
+    f"at {OPPORTUNITY_RATE*100:.0f}%/yr — reflects the time value of money."
+)
+with st.spinner("Generating inflation-adjusted spend chart…"):
+    fig_pv = make_pv_spend_fig(pb_a, pb_b, cfg_a, cfg_b)
+st.pyplot(fig_pv, use_container_width=True)
+plt.close(fig_pv)
 
 # Payback detail table
 pb_rows = []
