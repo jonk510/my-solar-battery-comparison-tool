@@ -169,18 +169,24 @@ def cached_load(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
-                    shade_summer, shade_autumn, shade_winter, _raw_df):
+                    shade_summer, shade_autumn, shade_winter,
+                    grid_charge, gc_start, gc_end, _raw_df):
     df_solar = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
-    return simulate(df_solar, solar_kw, bat_kwh, inv_kw, tariff)
+    return simulate(df_solar, solar_kw, bat_kwh, inv_kw, tariff,
+                    grid_charge=grid_charge, grid_charge_start=gc_start,
+                    grid_charge_end=gc_end)
 
 
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                    shade_summer, shade_autumn, shade_winter, stc_price, rebates_included,
+                   grid_charge, gc_start, gc_end,
                    _raw_df):
     df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
-                   stc_price=stc_price, rebates_included=rebates_included)
+                   stc_price=stc_price, rebates_included=rebates_included,
+                   grid_charge=grid_charge, grid_charge_start=gc_start,
+                   grid_charge_end=gc_end)
 
 
 @st.cache_data(show_spinner=False)
@@ -803,6 +809,30 @@ with st.sidebar:
     )
     stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, _live_stc, 0.50)
 
+    st.divider()
+    st.subheader("5. Battery grid charging")
+    st.caption(
+        "Applies to Midday Saver tariff only. "
+        "When enabled, the battery tops up from the grid during the chosen window."
+    )
+    grid_charge = st.toggle(
+        "Charge battery from grid (in addition to solar)",
+        value=True,
+    )
+    if grid_charge:
+        _gc_hours = [h / 2 for h in range(0, 49)]
+        def _fmt_h(h):
+            return f"{int(h):02d}:{int(round(h % 1 * 60)):02d}"
+        gc_window = st.select_slider(
+            "Grid charge window",
+            options=_gc_hours,
+            value=(9.0, 15.0),
+            format_func=_fmt_h,
+        )
+        gc_start, gc_end = float(gc_window[0]), float(gc_window[1])
+    else:
+        gc_start, gc_end = 9.0, 15.0
+
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
 
@@ -828,23 +858,25 @@ shading = (shade_summer, shade_autumn, shade_winter)
 with st.spinner("Simulating Option A…"):
     res_a = cached_simulate(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
-        *shading, raw_df,
+        *shading, grid_charge, gc_start, gc_end, raw_df,
     )
 with st.spinner("Simulating Option B…"):
     res_b = cached_simulate(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
-        *shading, raw_df,
+        *shading, grid_charge, gc_start, gc_end, raw_df,
     )
 with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
-        *shading, stc_price, cfg_a["rebates_inc"], raw_df,
+        *shading, stc_price, cfg_a["rebates_inc"],
+        grid_charge, gc_start, gc_end, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
-        *shading, stc_price, cfg_b["rebates_inc"], raw_df,
+        *shading, stc_price, cfg_b["rebates_inc"],
+        grid_charge, gc_start, gc_end, raw_df,
     )
 
 with st.spinner("Computing status quo…"):

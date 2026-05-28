@@ -551,7 +551,8 @@ def add_solar(raw_df, solar_kw):
     return df
 
 
-def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0):
+def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0,
+             grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0):
     esc      = (1+TARIFF_ESC)**yr_offset
     debs_esc = max(0.005, 1-DEBS_DECL*yr_offset)
     usable   = bat_kwh * BAT_DOD
@@ -587,7 +588,10 @@ def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0):
     ms_tariff = (tariff != "A1 Flat")
     if ms_tariff:
         slots_int = slot_arr.astype(int)
-        is_sop    = (slots_int >= 18) & (slots_int < 30)
+        h_arr     = slots_int / 2.0
+        is_grid_charge = (
+            (h_arr >= grid_charge_start) & (h_arr < grid_charge_end)
+        ) if grid_charge else np.zeros(n, dtype=bool)
 
     for i in range(n):
         load  = load_arr[i]
@@ -622,15 +626,15 @@ def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0):
             g_exp[i]  = surplus - solar_chg     # uncaptured solar exports to grid
 
             # Step 2 — handle load shortfall + possible grid top-up
-            if is_sop[i]:
-                # SOP: buy grid for load shortfall; also charge battery to full from grid
+            if is_grid_charge[i]:
+                # Grid charge window: cover load shortfall + top up battery from grid
                 room      = (usable - soc) / BAT_RTE**0.5
                 grid_chg  = min(room, max(0.0, inv_kw*0.5 - solar_chg))
                 soc       = min(soc + grid_chg * BAT_RTE**0.5, usable)
                 b_chg[i] += grid_chg
                 g_imp[i]  = shortfall + grid_chg
             else:
-                # Peak or off-peak: discharge battery first, grid as last resort
+                # Outside charge window: discharge battery first, grid as last resort
                 dis = min(shortfall, inv_kw*0.5, soc)
                 soc = max(0, soc - dis)
                 g_imp[i]  = max(0, shortfall - dis*BAT_RTE**0.5)
@@ -752,7 +756,8 @@ def baseline(df, tariff):
 
 
 def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
-            stc_price=STC_PRICE, rebates_included=False):
+            stc_price=STC_PRICE, rebates_included=False,
+            grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0):
     # ── 20-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
     # Years 1–20: solar+battery output degrades slightly each year
@@ -775,7 +780,10 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
     for yr in range(1, ANALYSIS_YEARS+1):
         s_yr = solar_kw*(1-SOL_DEG)**yr
         b_yr = max(0, bat_kwh*(1-BAT_DEG)**yr)
-        r    = simulate(df, s_yr, b_yr, inv_kw, tariff, yr_offset=yr)
+        r    = simulate(df, s_yr, b_yr, inv_kw, tariff, yr_offset=yr,
+                        grid_charge=grid_charge,
+                        grid_charge_start=grid_charge_start,
+                        grid_charge_end=grid_charge_end)
         if yr == 1:
             yr1_r = r
         base_yr = base*(1+TARIFF_ESC)**yr
