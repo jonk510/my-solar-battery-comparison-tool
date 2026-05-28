@@ -30,6 +30,7 @@ from solar_battery_analyser import (
     ms_rate, debs_rate, _monthly_net,
     CS, _QUOTES_FILE, SOLAR_K, SYS_EFF as _SYS_EFF, _lat,
     solar_stc_rebate, STC_PRICE,
+    compute_irr,
 )
 
 _QUOTES_PATH = _QUOTES_FILE
@@ -180,13 +181,14 @@ def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                    shade_summer, shade_autumn, shade_winter, stc_price, rebates_included,
-                   grid_charge, gc_start, gc_end, tariff_esc,
+                   grid_charge, gc_start, gc_end, tariff_esc, discount_rate,
                    _raw_df):
     df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                    stc_price=stc_price, rebates_included=rebates_included,
                    grid_charge=grid_charge, grid_charge_start=gc_start,
-                   grid_charge_end=gc_end, tariff_esc=tariff_esc)
+                   grid_charge_end=gc_end, tariff_esc=tariff_esc,
+                   discount_rate=discount_rate)
 
 
 @st.cache_data(show_spinner=False)
@@ -383,8 +385,8 @@ def make_total_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> pl
 
 
 def make_pv_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
-    """Total spend discounted to present value at OPPORTUNITY_RATE.
-    Bills escalate at TARIFF_ESC but future dollars are discounted back — more realistic view."""
+    """Total spend discounted to present value at the user's chosen discount rate."""
+    dr = pb_a.get("discount_rate", OPPORTUNITY_RATE)
     fig, ax = plt.subplots(figsize=(11, 4.5))
     fig.patch.set_facecolor("white")
     yrs = list(range(ANALYSIS_YEARS + 1))
@@ -393,21 +395,21 @@ def make_pv_spend_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.F
     base_pv = [0]
     for yr in range(1, ANALYSIS_YEARS + 1):
         base_yr = pb_a["savings"][yr - 1] + pb_a["net_costs"][yr - 1]
-        base_pv.append(base_pv[-1] + base_yr / (1 + OPPORTUNITY_RATE) ** yr)
+        base_pv.append(base_pv[-1] + base_yr / (1 + dr) ** yr)
     ax.plot(yrs, base_pv, color="gray", lw=1.5, ls="--", label="No solar/battery (bills only)")
 
     for pb, cfg, col in [(pb_a, cfg_a, OPTION_COLOURS[0]),
                           (pb_b, cfg_b, OPTION_COLOURS[1])]:
         pv_spend = [pb["net"]]  # upfront cost is today — no discounting
         for yr in range(1, ANALYSIS_YEARS + 1):
-            pv_spend.append(pv_spend[-1] + pb["net_costs"][yr - 1] / (1 + OPPORTUNITY_RATE) ** yr)
+            pv_spend.append(pv_spend[-1] + pb["net_costs"][yr - 1] / (1 + dr) ** yr)
         lbl = f"Option {'A' if col == OPTION_COLOURS[0] else 'B'}: {cfg['label']} ({cfg['tariff']})"
         ax.plot(yrs, pv_spend, color=col, lw=2.0, label=lbl)
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Spend — Present Value (AUD)")
     ax.set_title(
-        f"Cumulative Total Spend (Inflation-Adjusted @ {OPPORTUNITY_RATE*100:.0f}% discount) "
+        f"Cumulative Total Spend (PV-Adjusted @ {dr*100:.1f}% discount) "
         f"— {ANALYSIS_YEARS}-Year Horizon"
     )
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
@@ -448,6 +450,99 @@ def make_payback_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Fi
     )
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
     ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def make_npv_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """Side-by-side DCF waterfall: year-0 investment bar then PV of annual savings."""
+    dr  = pb_a.get("discount_rate", OPPORTUNITY_RATE)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.patch.set_facecolor("white")
+
+    for ax, pb, cfg, col, tag in [
+        (axes[0], pb_a, cfg_a, OPTION_COLOURS[0], "A"),
+        (axes[1], pb_b, cfg_b, OPTION_COLOURS[1], "B"),
+    ]:
+        yrs = list(range(ANALYSIS_YEARS + 1))
+        pv_flows = [-pb["net"]] + [
+            sav / (1.0 + dr) ** yr
+            for yr, sav in enumerate(pb["savings"], 1)
+        ]
+        cum_npv, running = [], 0.0
+        for v in pv_flows:
+            running += v
+            cum_npv.append(running)
+
+        bar_cols = ["#b71c1c" if v < 0 else col for v in pv_flows]
+        ax.bar(yrs, pv_flows, color=bar_cols, alpha=0.72, width=0.7, zorder=2)
+        ax.plot(yrs, cum_npv, color=col, lw=2.0, marker=".", markersize=3, zorder=5,
+                label="Cumulative NPV")
+        ax.axhline(0, color="black", lw=0.8, ls=":")
+        if pb.get("pb_yr_disc"):
+            ax.axvline(pb["pb_yr_disc"], color="gray", lw=1.0, ls="--",
+                       label=f"Disc. payback yr {pb['pb_yr_disc']}")
+
+        irr = compute_irr(pb)
+        irr_str = f"{irr*100:.1f}%" if irr is not None else "N/A"
+        ax.text(0.97, 0.04,
+                f"NPV: ${pb['npv']:,.0f}\nIRR:  {irr_str}",
+                transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.4", fc="white", ec=col, alpha=0.9, lw=1.2))
+
+        ax.set_xlabel("Year")
+        ax.set_ylabel("Present Value of Cash Flow (AUD)")
+        ax.set_title(f"Option {tag}: {cfg['label']}", fontsize=9, fontweight="bold", color=col)
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+        ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+        ax.legend(fontsize=7, loc="upper left")
+        ax.grid(axis="y", alpha=0.3)
+
+    fig.suptitle(
+        f"Discounted Cash Flow — {ANALYSIS_YEARS}-Year Horizon  ·  "
+        f"Discount rate {dr*100:.1f}%  ·  "
+        f"Red bar = upfront cost, coloured bars = PV of annual savings",
+        fontsize=9, fontweight="bold",
+    )
+    fig.tight_layout()
+    return fig
+
+
+def make_npv_sensitivity_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
+    """NPV as a function of discount rate — x-intercept is the IRR."""
+    current_dr = pb_a.get("discount_rate", OPPORTUNITY_RATE)
+    rates = np.arange(0.0, 0.205, 0.005)
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    fig.patch.set_facecolor("white")
+
+    for pb, cfg, col, tag in [
+        (pb_a, cfg_a, OPTION_COLOURS[0], "A"),
+        (pb_b, cfg_b, OPTION_COLOURS[1], "B"),
+    ]:
+        cashflows = [-pb["net"]] + pb["savings"]
+        npvs = [
+            sum(cf / (1.0 + r) ** i for i, cf in enumerate(cashflows))
+            for r in rates
+        ]
+        ax.plot(rates * 100, npvs, color=col, lw=2.0,
+                label=f"Option {tag}: {cfg['label']}")
+        irr = compute_irr(pb)
+        if irr is not None and irr <= 0.20:
+            ax.plot(irr * 100, 0, "o", color=col, ms=9, zorder=5,
+                    label=f"IRR ({tag}) = {irr*100:.1f}%")
+
+    ax.axhline(0, color="black", lw=0.8, ls=":")
+    ax.axvline(current_dr * 100, color="dimgray", lw=1.2, ls="--",
+               label=f"Current rate ({current_dr*100:.1f}%)")
+    ax.set_xlabel("Discount / Hurdle Rate (%/yr)")
+    ax.set_ylabel("NPV (AUD)")
+    ax.set_title(
+        f"NPV Sensitivity to Discount Rate — {ANALYSIS_YEARS}-Year Horizon\n"
+        f"Where a line crosses $0 is the IRR (your effective annual return on the investment)"
+    )
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
     ax.legend(fontsize=8)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -846,6 +941,19 @@ with st.sidebar:
     )
     tariff_esc = TARIFF_ESC if apply_inflation else 0.0
 
+    discount_pct = st.slider(
+        "Discount / opportunity-cost rate (%/yr)",
+        min_value=0.0, max_value=20.0,
+        value=round(OPPORTUNITY_RATE * 100, 1),
+        step=0.5,
+        help=(
+            "The annual return you could earn by investing the upfront cost elsewhere "
+            "(e.g. ~4–5% term deposit, ~8–10% diversified ETF). "
+            "Use a nominal rate when inflation is ON, or a real rate (~5.5%) when OFF."
+        ),
+    )
+    discount_rate = discount_pct / 100.0
+
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
 
@@ -883,13 +991,13 @@ with st.spinner("Computing payback…"):
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
         *shading, stc_price, cfg_a["rebates_inc"],
-        grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
         *shading, stc_price, cfg_b["rebates_inc"],
-        grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
     )
 
 with st.spinner("Computing status quo…"):
@@ -928,13 +1036,14 @@ def metric_col(col, res, pb, cfg, bl, colour):
             unsafe_allow_html=True,
         )
         r1, r2, r3 = st.columns(3)
+        _dr_pct = pb.get("discount_rate", OPPORTUNITY_RATE) * 100
         r1.metric("Annual saving", f"${annual_saving:,.0f}")
         r2.metric("Nominal payback", f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr")
-        r3.metric("NPV @ 8%", f"${pb['npv']:,.0f}")
+        r3.metric(f"NPV @ {_dr_pct:.0f}%", f"${pb['npv']:,.0f}")
 
         r4, r5, r6 = st.columns(3)
         r4.metric("20-yr saving", f"${pb['total_save']:,.0f}")
-        r5.metric("ROI", f"{pb['roi']:.0f}%")
+        r5.metric("20-yr total return", f"{pb['roi']:.0f}%")
         r6.metric("Self-sufficiency", f"{res['self_suf_pct']:.0f}%")
 
         r7, r8 = st.columns(2)
@@ -1013,15 +1122,42 @@ with st.spinner("Generating total spend chart…"):
 st.pyplot(fig_ts, use_container_width=True)
 plt.close(fig_ts)
 
-st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Total Spend (Inflation-Adjusted)")
+st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Total Spend (PV-Adjusted)")
 st.caption(
     f"Same as above but future bills and ongoing costs are discounted to today's dollars "
-    f"at {OPPORTUNITY_RATE*100:.0f}%/yr — reflects the time value of money."
+    f"at {discount_rate*100:.1f}%/yr — reflects the time value of money."
 )
 with st.spinner("Generating inflation-adjusted spend chart…"):
     fig_pv = make_pv_spend_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_pv, use_container_width=True)
 plt.close(fig_pv)
+
+# ── NPV Analysis ──────────────────────────────────────────────────────────────
+st.divider()
+_dr_pct_main = pb_a.get("discount_rate", OPPORTUNITY_RATE) * 100
+st.subheader("NPV Analysis")
+st.caption(
+    f"**Net Present Value (NPV)** = total value of the investment in today's dollars, "
+    f"discounting future savings at {_dr_pct_main:.1f}%/yr (your opportunity-cost rate). "
+    f"NPV > $0 means the investment beats what you'd earn by keeping the money in the bank. "
+    f"**IRR** (Internal Rate of Return) is the effective annual return on your investment — "
+    f"the discount rate at which NPV = $0. Compare it to your next-best alternative."
+)
+with st.spinner("Generating DCF chart…"):
+    fig_npv = make_npv_fig(pb_a, pb_b, cfg_a, cfg_b)
+st.pyplot(fig_npv, use_container_width=True)
+plt.close(fig_npv)
+
+st.subheader("NPV Sensitivity to Discount Rate")
+st.caption(
+    "Shows how NPV changes across a range of discount rates. "
+    "The dot marks the IRR (where NPV = $0). "
+    "If your required return is to the left of the dot, the investment makes sense at that hurdle."
+)
+with st.spinner("Generating sensitivity chart…"):
+    fig_npv_sens = make_npv_sensitivity_fig(pb_a, pb_b, cfg_a, cfg_b)
+st.pyplot(fig_npv_sens, use_container_width=True)
+plt.close(fig_npv_sens)
 
 # Payback detail table
 pb_rows = []
@@ -1036,11 +1172,12 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
         "  – Federal battery rebate": "included in quote" if inc else f"-${pb.get('fed', 0):,.0f}",
         "Purchase price (net)": f"${pb['net']:,.0f}",
         "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
-        f"Opp-cost payback ({OPPORTUNITY_RATE*100:.0f}%)":
+        f"Disc. payback ({pb.get('discount_rate', OPPORTUNITY_RATE)*100:.1f}%)":
             f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
-        f"NPV @ {OPPORTUNITY_RATE*100:.0f}%": f"${pb['npv']:,.0f}",
+        f"NPV @ {pb.get('discount_rate', OPPORTUNITY_RATE)*100:.1f}%": f"${pb['npv']:,.0f}",
+        "IRR": (lambda r: f"{r*100:.1f}%" if r is not None else "N/A")(compute_irr(pb)),
         "20-yr saving": f"${pb['total_save']:,.0f}",
-        "ROI": f"{pb['roi']:.0f}%",
+        "20-yr total return": f"{pb['roi']:.0f}%",
         "Year-1 saving": f"${pb['yr1_save']:,.0f}",
         "Electricity price inflation": f"{tariff_esc*100:.1f}%/yr",
     })

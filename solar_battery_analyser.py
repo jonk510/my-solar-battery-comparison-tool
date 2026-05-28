@@ -553,7 +553,7 @@ def add_solar(raw_df, solar_kw):
 
 def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0,
              grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0,
-             tariff_esc=TARIFF_ESC):
+             tariff_esc=TARIFF_ESC, solar_scale=1.0):
     esc      = (1 + tariff_esc) ** yr_offset
     debs_esc = max(0.005, 1-DEBS_DECL*yr_offset)
     usable   = bat_kwh * BAT_DOD
@@ -565,7 +565,7 @@ def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0,
     b_chg = np.zeros(n); b_dis = np.zeros(n)
     s_slf = np.zeros(n); soc_a = np.zeros(n)
 
-    solar_arr = df["solar_kwh"].values
+    solar_arr = df["solar_kwh"].values * solar_scale   # scaled for panel degradation each year
     load_arr  = df["consumption_kwh"].values
     slot_arr  = df["slot"].values
 
@@ -759,7 +759,7 @@ def baseline(df, tariff):
 def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
             stc_price=STC_PRICE, rebates_included=False,
             grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0,
-            tariff_esc=TARIFF_ESC):
+            tariff_esc=TARIFF_ESC, discount_rate=OPPORTUNITY_RATE):
     # ── 20-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
     # Years 1–20: solar+battery output degrades slightly each year
@@ -780,20 +780,22 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
     savings=[]; net_costs=[]; cum=[-net]; cum_disc=[-net]
     yr1_r = None
     for yr in range(1, ANALYSIS_YEARS+1):
-        s_yr = solar_kw*(1-SOL_DEG)**yr
-        b_yr = max(0, bat_kwh*(1-BAT_DEG)**yr)
+        s_yr        = solar_kw * (1 - SOL_DEG) ** yr
+        solar_scale = s_yr / solar_kw if solar_kw > 0 else 1.0
+        b_yr        = max(0, bat_kwh * (1 - BAT_DEG) ** yr)
         r    = simulate(df, s_yr, b_yr, inv_kw, tariff, yr_offset=yr,
                         grid_charge=grid_charge,
                         grid_charge_start=grid_charge_start,
                         grid_charge_end=grid_charge_end,
-                        tariff_esc=tariff_esc)
+                        tariff_esc=tariff_esc,
+                        solar_scale=solar_scale)
         if yr == 1:
             yr1_r = r
         base_yr = base * (1 + tariff_esc) ** yr
         sav  = base_yr - r["net_cost"]
         savings.append(sav); net_costs.append(r["net_cost"])
         cum.append(cum[-1]+sav)
-        cum_disc.append(cum_disc[-1] + sav / (1+OPPORTUNITY_RATE)**yr)
+        cum_disc.append(cum_disc[-1] + sav / (1 + discount_rate)**yr)
 
     pb_yr      = 0 if net == 0 else next((yr for yr,cf in enumerate(cum[1:],1) if cf>=0), None)
     pb_yr_disc = 0 if net == 0 else next((yr for yr,cf in enumerate(cum_disc[1:],1) if cf>=0), None)
@@ -805,9 +807,41 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                 total_save=sum(savings),
                 roi=sum(savings)/net*100 if net>0 else 0,
                 yr1_save=savings[0] if savings else 0,
+                discount_rate=discount_rate,
                 self_suf_pct=yr1_r["self_suf_pct"] if yr1_r else 0.0,
                 annual_export_kwh=yr1_r["annual_export_kwh"] if yr1_r else 0.0,
                 annual_solar_kwh=yr1_r["annual_solar_kwh"] if yr1_r else 0.0)
+
+
+def compute_irr(pb: dict):
+    """Internal Rate of Return: the discount rate at which NPV = 0.
+
+    Finds r such that  -net + Σ savings_yr/(1+r)^yr = 0.
+    Returns None if the system never pays back at any positive rate, or net=0.
+    """
+    net = pb["net"]
+    if net <= 0:
+        return None
+    cashflows = [-net] + pb["savings"]
+    if sum(cashflows) <= 0:
+        return None   # total nominal savings < investment — no real IRR
+
+    def _npv(r):
+        return sum(cf / (1.0 + r) ** i for i, cf in enumerate(cashflows))
+
+    if _npv(0.0) <= 0:
+        return None
+    if _npv(2.0) >= 0:
+        return 2.0    # IRR > 200%, extraordinary
+
+    lo, hi = 0.0, 2.0
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        if _npv(mid) >= 0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
 
 
 def payback_arbitrage(raw_df, bat_kwh, inv_kw, cost, label):
