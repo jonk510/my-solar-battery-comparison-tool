@@ -552,8 +552,9 @@ def add_solar(raw_df, solar_kw):
 
 
 def simulate(df, solar_kw, bat_kwh, inv_kw, tariff, yr_offset=0,
-             grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0):
-    esc      = (1+TARIFF_ESC)**yr_offset
+             grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0,
+             tariff_esc=TARIFF_ESC):
+    esc      = (1 + tariff_esc) ** yr_offset
     debs_esc = max(0.005, 1-DEBS_DECL*yr_offset)
     usable   = bat_kwh * BAT_DOD
     soc      = usable * 0.5
@@ -757,7 +758,8 @@ def baseline(df, tariff):
 
 def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
             stc_price=STC_PRICE, rebates_included=False,
-            grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0):
+            grid_charge=True, grid_charge_start=9.0, grid_charge_end=15.0,
+            tariff_esc=TARIFF_ESC):
     # ── 20-year payback model:
     # Year 0: pay net system cost (gross price minus government rebates)
     # Years 1–20: solar+battery output degrades slightly each year
@@ -783,10 +785,11 @@ def payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
         r    = simulate(df, s_yr, b_yr, inv_kw, tariff, yr_offset=yr,
                         grid_charge=grid_charge,
                         grid_charge_start=grid_charge_start,
-                        grid_charge_end=grid_charge_end)
+                        grid_charge_end=grid_charge_end,
+                        tariff_esc=tariff_esc)
         if yr == 1:
             yr1_r = r
-        base_yr = base*(1+TARIFF_ESC)**yr
+        base_yr = base * (1 + tariff_esc) ** yr
         sav  = base_yr - r["net_cost"]
         savings.append(sav); net_costs.append(r["net_cost"])
         cum.append(cum[-1]+sav)

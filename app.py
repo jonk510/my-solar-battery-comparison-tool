@@ -170,23 +170,23 @@ def cached_load(file_bytes: bytes, filename: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def cached_simulate(raw_df_hash, solar_kw, bat_kwh, inv_kw, tariff,
                     shade_summer, shade_autumn, shade_winter,
-                    grid_charge, gc_start, gc_end, _raw_df):
+                    grid_charge, gc_start, gc_end, tariff_esc, _raw_df):
     df_solar = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return simulate(df_solar, solar_kw, bat_kwh, inv_kw, tariff,
                     grid_charge=grid_charge, grid_charge_start=gc_start,
-                    grid_charge_end=gc_end)
+                    grid_charge_end=gc_end, tariff_esc=tariff_esc)
 
 
 @st.cache_data(show_spinner=False)
 def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                    shade_summer, shade_autumn, shade_winter, stc_price, rebates_included,
-                   grid_charge, gc_start, gc_end,
+                   grid_charge, gc_start, gc_end, tariff_esc,
                    _raw_df):
     df = add_solar_shaded(_raw_df, solar_kw, shade_summer, shade_autumn, shade_winter)
     return payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
                    stc_price=stc_price, rebates_included=rebates_included,
                    grid_charge=grid_charge, grid_charge_start=gc_start,
-                   grid_charge_end=gc_end)
+                   grid_charge_end=gc_end, tariff_esc=tariff_esc)
 
 
 @st.cache_data(show_spinner=False)
@@ -833,6 +833,19 @@ with st.sidebar:
     else:
         gc_start, gc_end = 9.0, 15.0
 
+    st.divider()
+    st.subheader("6. Future cost assumptions")
+    apply_inflation = st.toggle(
+        f"Apply electricity price inflation ({TARIFF_ESC*100:.1f}%/yr)",
+        value=True,
+        help=(
+            "When on, grid electricity prices in the payback/cashflow projections "
+            f"escalate at {TARIFF_ESC*100:.1f}% per year, matching long-run CPI expectations. "
+            "Turn off to model flat (today's) electricity prices for all 20 years."
+        ),
+    )
+    tariff_esc = TARIFF_ESC if apply_inflation else 0.0
+
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
 
 
@@ -858,25 +871,25 @@ shading = (shade_summer, shade_autumn, shade_winter)
 with st.spinner("Simulating Option A…"):
     res_a = cached_simulate(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
-        *shading, grid_charge, gc_start, gc_end, raw_df,
+        *shading, grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
 with st.spinner("Simulating Option B…"):
     res_b = cached_simulate(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
-        *shading, grid_charge, gc_start, gc_end, raw_df,
+        *shading, grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
 with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
         *shading, stc_price, cfg_a["rebates_inc"],
-        grid_charge, gc_start, gc_end, raw_df,
+        grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
         *shading, stc_price, cfg_b["rebates_inc"],
-        grid_charge, gc_start, gc_end, raw_df,
+        grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
 
 with st.spinner("Computing status quo…"):
@@ -1029,6 +1042,7 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
         "20-yr saving": f"${pb['total_save']:,.0f}",
         "ROI": f"{pb['roi']:.0f}%",
         "Year-1 saving": f"${pb['yr1_save']:,.0f}",
+        "Electricity price inflation": f"{tariff_esc*100:.1f}%/yr",
     })
 st.dataframe(pd.DataFrame(pb_rows).set_index("Option"), use_container_width=True)
 
