@@ -1147,15 +1147,22 @@ with st.sidebar:
     st.divider()
     st.subheader("6. Future cost assumptions")
     apply_inflation = st.toggle(
-        f"Apply electricity price inflation ({TARIFF_ESC*100:.1f}%/yr)",
+        "Apply electricity price inflation",
         value=True,
-        help=(
-            "When on, grid electricity prices in the payback/cashflow projections "
-            f"escalate at {TARIFF_ESC*100:.1f}% per year, matching long-run CPI expectations. "
-            "Turn off to model flat (today's) electricity prices for all 20 years."
-        ),
+        help="When on, grid electricity prices escalate each year in the 20-year projections. "
+             "Turn off to model flat (today's) prices for all 20 years.",
     )
-    tariff_esc = TARIFF_ESC if apply_inflation else 0.0
+    if apply_inflation:
+        tariff_esc_pct = st.slider(
+            "Electricity price inflation (%/yr)",
+            min_value=0.0, max_value=10.0, value=6.5, step=0.5,
+            help="Synergy A1 rate rose from ~12.5 ¢/kWh (2009) to ~31.7 ¢/kWh (2024) — "
+                 "a 15-year compound average of ~6.4%/yr. "
+                 "Use 2–3% for a conservative view, 6–7% for the historical WA average.",
+        )
+        tariff_esc = tariff_esc_pct / 100.0
+    else:
+        tariff_esc = 0.0
 
     discount_pct = st.slider(
         "Discount / opportunity-cost rate (%/yr)",
