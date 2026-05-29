@@ -889,10 +889,13 @@ with st.sidebar:
 
     st.divider()
     st.subheader("3. Site shading")
-    st.caption("Fraction of unshaded solar reaching the panels each season.")
-    shade_summer  = st.slider("Summer shading (Dec–Feb)",  0.0, 1.0, 0.60, 0.05)
-    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.40, 0.05)
-    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.20, 0.05)
+    st.caption(
+        "Fraction of unshaded generation actually reaching the panels. "
+        "1.0 = fully unshaded. Typical Perth suburban: 0.85–0.95 summer, 0.65–0.80 winter."
+    )
+    shade_summer  = st.slider("Summer shading (Dec–Feb)",  0.0, 1.0, 0.90, 0.05)
+    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.80, 0.05)
+    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.70, 0.05)
 
     st.divider()
     st.subheader("4. STC price")
