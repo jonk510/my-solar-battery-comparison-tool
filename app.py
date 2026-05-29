@@ -665,14 +665,26 @@ def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
     )
     month_labels = ["Jan","Feb","Mar","Apr","May","Jun",
                     "Jul","Aug","Sep","Oct","Nov","Dec"]
-    fig, ax = plt.subplots(figsize=(13, 5))
+    fig, ax = plt.subplots(figsize=(18, 7))
     fig.patch.set_facecolor("white")
-    im = ax.imshow(pivot.values, aspect="auto", cmap="YlOrRd", interpolation="nearest")
+    data = pivot.values
+    im = ax.imshow(data, aspect="auto", cmap="YlOrRd", interpolation="nearest")
     # White gridlines between cells
     ax.set_xticks(np.arange(-0.5, 24, 1), minor=True)
     ax.set_yticks(np.arange(-0.5, 12, 1), minor=True)
     ax.grid(which="minor", color="white", linewidth=0.5)
     ax.tick_params(which="minor", bottom=False, left=False)
+    # Cell value annotations — white text on dark cells, dark text on light cells
+    vmax = np.nanmax(data)
+    threshold = vmax * 0.55
+    for row in range(12):
+        for col in range(24):
+            val = data[row, col]
+            if np.isnan(val):
+                continue
+            txt_col = "white" if val > threshold else "#333333"
+            ax.text(col, row, f"{val:.2f}", ha="center", va="center",
+                    fontsize=5.5, color=txt_col, fontweight="bold")
     cbar = fig.colorbar(im, ax=ax, pad=0.02)
     cbar.set_label("Avg kWh / 30-min slot", fontsize=9)
     ax.set_yticks(range(12))
