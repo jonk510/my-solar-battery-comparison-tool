@@ -852,12 +852,13 @@ def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
     cfg_base_local = {"label": "Status Quo", "tariff": cfg_a["tariff"]}
 
     def _save(pdf, fig, caption=""):
+        fig.set_size_inches(11.69, 8.27)   # normalise every page to A4 landscape
         if caption:
-            fig.subplots_adjust(bottom=0.13)
+            fig.subplots_adjust(bottom=0.11)
             wrapped = "\n".join(textwrap.wrap(caption, 145))
             fig.text(0.03, 0.005, wrapped, fontsize=7.5, va="bottom",
                      color="#555555", style="italic")
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig, bbox_inches="tight", dpi=72)
         plt.close(fig)
 
     buf = _io.BytesIO()
@@ -895,7 +896,7 @@ def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
             ]:
                 ax.text(0.5, y2, txt, ha="center", va="center",
                         fontsize=fs, fontweight=fw, color="white")
-        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight", dpi=72); plt.close(fig)
 
         _save(pdf, make_load_heatmap_fig(raw_df),
               "Average electricity consumption by month and hour of day. Darker cells = higher demand. "
@@ -1531,11 +1532,19 @@ st.caption(
 )
 if st.button("Generate PDF Report", type="primary"):
     with st.spinner("Building report — this may take 5–10 seconds…"):
-        st.session_state["_pdf_bytes"] = _build_pdf(
-            raw_df, res_a, res_b, res_base, pb_a, pb_b,
-            cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
-            tariff_esc, discount_rate,
-        )
+        try:
+            st.session_state["_pdf_bytes"] = _build_pdf(
+                raw_df, res_a, res_b, res_base, pb_a, pb_b,
+                cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
+                tariff_esc, discount_rate,
+            )
+            st.session_state["_pdf_error"] = None
+        except Exception as _e:
+            st.session_state["_pdf_bytes"] = None
+            st.session_state["_pdf_error"] = str(_e)
+
+if st.session_state.get("_pdf_error"):
+    st.error(f"PDF generation failed: {st.session_state['_pdf_error']}")
 
 if st.session_state.get("_pdf_bytes"):
     st.download_button(
