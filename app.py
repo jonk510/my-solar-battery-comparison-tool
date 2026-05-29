@@ -861,112 +861,276 @@ def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
     from datetime import date
     from matplotlib.backends.backend_pdf import PdfPages
 
-    dr      = pb_a.get("discount_rate", OPPORTUNITY_RATE)
-    dr_pct  = dr * 100
-    today   = date.today().strftime("%d %B %Y")
+    dr     = pb_a.get("discount_rate", OPPORTUNITY_RATE)
+    dr_pct = dr * 100
+    today  = date.today().strftime("%d %B %Y")
     cfg_base_local = {"label": "Status Quo", "tariff": cfg_a["tariff"]}
+    PAGE   = (11.69, 8.27)
+    DARK   = "#1c2b3a"
+    LIGHT  = "#f4f6f8"
 
-    def _save(pdf, fig, caption=""):
-        fig.set_size_inches(11.69, 8.27)   # normalise every page to A4 landscape
-        if caption:
-            fig.subplots_adjust(bottom=0.11)
-            wrapped = "\n".join(textwrap.wrap(caption, 145))
-            fig.text(0.03, 0.005, wrapped, fontsize=7.5, va="bottom",
-                     color="#555555", style="italic")
+    def _footer(fig):
+        fig.text(0.97, 0.012, f"Solar & Battery Investment Report  ·  {today}",
+                 fontsize=7, ha="right", va="bottom", color="#999999",
+                 transform=fig.transFigure)
+
+    def _save_chart(pdf, fig, caption):
+        """Resize to A4 landscape, add caption strip at bottom, save."""
+        fig.set_size_inches(*PAGE)
+        fig.patch.set_facecolor("white")
+        fig.subplots_adjust(bottom=0.16, top=0.93)
+        wrapped = "\n".join(textwrap.wrap(caption, 148))
+        fig.text(0.03, 0.005, wrapped, fontsize=8, va="bottom", color="#444444",
+                 style="italic", transform=fig.transFigure)
+        _footer(fig)
+        pdf.savefig(fig, bbox_inches="tight", dpi=72)
+        plt.close(fig)
+
+    def _text_page(pdf, section_num, title, paras):
+        """A4 landscape text page with a dark header bar and body paragraphs."""
+        fig = plt.figure(figsize=PAGE)
+        fig.patch.set_facecolor("white")
+        # Header bar
+        ax_h = fig.add_axes([0.0, 0.88, 1.0, 0.12])
+        ax_h.set_facecolor(DARK); ax_h.axis("off")
+        ax_h.text(0.03, 0.65, f"Section {section_num}", color="#aabccc",
+                  fontsize=9, va="center", ha="left", transform=ax_h.transAxes)
+        ax_h.text(0.03, 0.25, title, color="white", fontsize=15, fontweight="bold",
+                  va="center", ha="left", transform=ax_h.transAxes)
+        ax_h.text(0.97, 0.45, f"Solar & Battery Investment Report  ·  {today}",
+                  color="#aabccc", fontsize=8, va="center", ha="right",
+                  transform=ax_h.transAxes)
+        # Body
+        y = 0.82
+        for para in paras:
+            if para.startswith("  •"):           # bullet
+                wrapped = textwrap.fill(para, 105)
+                fig.text(0.06, y, wrapped, fontsize=10, va="top", color="#333333",
+                         linespacing=1.4, transform=fig.transFigure)
+                y -= 0.05 + wrapped.count("\n") * 0.033
+            else:
+                wrapped = textwrap.fill(para, 105)
+                fig.text(0.06, y, wrapped, fontsize=10.5, va="top", color="#222222",
+                         linespacing=1.55, transform=fig.transFigure)
+                y -= 0.065 + wrapped.count("\n") * 0.038
+        _footer(fig)
         pdf.savefig(fig, bbox_inches="tight", dpi=72)
         plt.close(fig)
 
     buf = _io.BytesIO()
     with PdfPages(buf) as pdf:
 
-        # Cover page
-        fig = plt.figure(figsize=(11.69, 8.27))
-        fig.patch.set_facecolor("#1c2b3a")
-        fig.text(0.5, 0.85, "Solar & Battery Investment Report",
-                 ha="center", fontsize=26, fontweight="bold", color="white")
-        fig.text(0.5, 0.75, "Perth, Western Australia  ·  Synergy Network",
+        # ── Cover page ──────────────────────────────────────────────────────
+        fig = plt.figure(figsize=PAGE)
+        fig.patch.set_facecolor(DARK)
+        fig.text(0.5, 0.91, "Solar & Battery Investment Report",
+                 ha="center", fontsize=28, fontweight="bold", color="white")
+        fig.text(0.5, 0.84, "Perth, Western Australia  ·  Synergy Network",
                  ha="center", fontsize=13, color="#aabccc")
-        fig.text(0.5, 0.67, f"Generated: {today}",
-                 ha="center", fontsize=11, color="#aabccc")
+        fig.text(0.5, 0.79, f"Prepared: {today}",
+                 ha="center", fontsize=10, color="#7a8fa0")
+
         for xi, pb, cfg, col in [
-            (0.27, pb_a, cfg_a, OPTION_COLOURS[0]),
-            (0.73, pb_b, cfg_b, OPTION_COLOURS[1]),
+            (0.25, pb_a, cfg_a, OPTION_COLOURS[0]),
+            (0.75, pb_b, cfg_b, OPTION_COLOURS[1]),
         ]:
             tag   = "A" if xi < 0.5 else "B"
             irr   = compute_irr(pb)
             irr_s = f"{irr*100:.1f}%" if irr else "N/A"
             npv10 = -pb["net"] + sum(pb["savings"][yr-1]/(1+dr)**yr for yr in range(1, 11))
-            ax = fig.add_axes([xi - 0.19, 0.05, 0.38, 0.54])
-            ax.set_facecolor(col); ax.set_xlim(0,1); ax.set_ylim(0,1); ax.axis("off")
-            for y2, txt, fs, fw in [
-                (0.92, f"Option {tag}", 13, "bold"),
-                (0.82, cfg["label"][:48], 8.5, "normal"),
-                (0.70, f"Net system cost:  ${pb['net']:,.0f}", 10, "normal"),
-                (0.59, (f"Nominal payback:  {pb['pb_yr']} yr" if pb["pb_yr"] else "Nominal payback:  >20 yr"), 10, "normal"),
-                (0.48, f"NPV 10yr @ {dr_pct:.0f}%:  ${npv10:,.0f}", 10, "normal"),
-                (0.37, f"NPV 20yr @ {dr_pct:.0f}%:  ${pb['npv']:,.0f}", 10, "normal"),
-                (0.26, f"IRR:  {irr_s}", 10, "normal"),
-                (0.15, f"20-yr return:  {pb['roi']:.0f}%", 10, "normal"),
-                (0.05, f"Year-1 saving:  ${pb['yr1_save']:,.0f}", 10, "normal"),
-            ]:
-                ax.text(0.5, y2, txt, ha="center", va="center",
-                        fontsize=fs, fontweight=fw, color="white")
+            ax = fig.add_axes([xi - 0.21, 0.04, 0.42, 0.67])
+            ax.set_facecolor(col); ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+            # Option header
+            ax.add_patch(plt.Rectangle((0, 0.88), 1, 0.12, color="black", alpha=0.2))
+            ax.text(0.5, 0.94, f"Option {tag}", ha="center", va="center",
+                    fontsize=14, fontweight="bold", color="white")
+            # Label
+            ax.text(0.5, 0.81, cfg["label"][:52], ha="center", va="center",
+                    fontsize=8, color="white", alpha=0.9)
+            # Divider
+            ax.axhline(0.75, color="white", alpha=0.3, lw=0.8)
+            # Metrics
+            metrics = [
+                ("Net system cost",            f"${pb['net']:,.0f}"),
+                ("Nominal payback",             f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr"),
+                (f"NPV 10yr @ {dr_pct:.0f}%",  f"${npv10:,.0f}"),
+                (f"NPV 20yr @ {dr_pct:.0f}%",  f"${pb['npv']:,.0f}"),
+                ("IRR",                         irr_s),
+                ("20-yr total return",          f"{pb['roi']:.0f}%"),
+                ("Year-1 saving",               f"${pb['yr1_save']:,.0f}"),
+            ]
+            for i, (label, value) in enumerate(metrics):
+                y_pos = 0.68 - i * 0.095
+                ax.text(0.08, y_pos, label, va="center", fontsize=9.5, color="white", alpha=0.85)
+                ax.text(0.92, y_pos, value, va="center", fontsize=9.5, color="white",
+                        fontweight="bold", ha="right")
         pdf.savefig(fig, bbox_inches="tight", dpi=72); plt.close(fig)
 
-        _save(pdf, make_load_heatmap_fig(raw_df),
-              "Average electricity consumption by month and hour of day. Darker cells = higher demand. "
-              "Evening peaks (5–9 pm) and morning peaks (6–8 am) are typical in Perth households. "
-              "Solar generation occurs roughly 7 am – 5 pm; battery storage bridges the gap to the evening peak.")
+        # ── Section 1: Consumption ───────────────────────────────────────────
+        _text_page(pdf, 1, "Your Electricity Consumption", [
+            "Before evaluating solar and battery options, it helps to understand when and how much "
+            "electricity your household uses. The chart on the next page shows your average consumption "
+            "for every hour of the day, broken down by month — based on your actual Synergy meter data.",
+            "What to look for: the darkest orange and red cells show when your demand is highest. For "
+            "most Perth homes this is the evening (5–9 pm) when people are home cooking, watching TV, "
+            "and running appliances, and to a lesser extent the morning (6–8 am).",
+            "Solar panels generate electricity between roughly 7 am and 5 pm. Any demand outside those "
+            "hours must be met by a battery (if you have one) or the grid. A large evening peak relative "
+            "to daytime demand makes a battery particularly valuable — it stores cheap midday solar and "
+            "releases it into the expensive evening peak window.",
+        ])
+        _save_chart(pdf, make_load_heatmap_fig(raw_df),
+                    "Each cell shows average electricity use (kWh per 30-min interval) in a given month "
+                    "and hour of day. Darker orange/red = higher consumption. Solar generation window is "
+                    "roughly 7 am – 5 pm.")
 
-        _save(pdf, make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter),
-              "Theoretical solar output by season. Dashed = unshaded; solid = with your shading factors applied. "
-              "The gap between dashed and solid shows generation lost to obstructions. Winter output is lower due "
-              "to Perth's shorter days and lower solar elevation angle at 32° S latitude.")
+        # ── Section 2: Solar Generation ──────────────────────────────────────
+        _text_page(pdf, 2, "Solar Generation by Season", [
+            "Solar panels generate electricity from sunlight, with output varying throughout the day and "
+            "across seasons. Perth enjoys some of Australia's best solar resources, but performance still "
+            "drops significantly in winter due to shorter days and a lower sun angle in the sky.",
+            "The chart on the next page shows the expected generation profile for each option across the "
+            "four seasons. Two curves are shown for Option A: the dashed line is the theoretical maximum "
+            "with no shading, and the solid line is the estimated actual output after applying your "
+            "seasonal shading factors. Option B's shaded output is also shown.",
+            "Shading from trees, neighbouring buildings, or roof obstructions can meaningfully reduce "
+            "annual yield — even partial shading can cut output disproportionately. The shaded area "
+            "between the two Option A lines shows how much generation is being lost.",
+        ])
+        _save_chart(pdf, make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter),
+                    "Dashed line = theoretical maximum (no shading). Solid line = estimated actual output "
+                    "with your seasonal shading factors applied. Shaded area shows generation lost to "
+                    "obstructions. Winter output is lower due to Perth's shorter days at 32° S latitude.")
 
-        _save(pdf, make_seasonal_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
-              "Average half-hourly energy flows per season. Stacked areas: solar self-use (yellow), battery "
-              "discharge (teal), grid import (blue). Export above the load line earns DEBS credits. "
-              "Green shading = super off-peak 9 am–3 pm; red = peak 3–9 pm.")
+        # ── Section 3: Energy Flows ───────────────────────────────────────────
+        _text_page(pdf, 3, "How Your Energy Is Used — Typical Day by Season", [
+            "This section shows how your electricity is supplied on a typical day in each season, "
+            "comparing three scenarios: no solar (Status Quo), Option A, and Option B.",
+            "Reading the charts: the stacked coloured areas show where your electricity comes from at "
+            "each point in the day. Yellow is solar power used directly in your home (free electricity). "
+            "Teal is energy supplied by the battery. Blue is electricity imported from the grid (costs "
+            "money). The light blue area above the black load line shows surplus solar exported back to "
+            "the grid, earning DEBS (Distributed Energy Buyback Scheme) credits.",
+            "The cost box in each chart shows the average daily electricity cost and how much is saved "
+            "compared to the no-solar baseline. Green shading highlights the Synergy Midday Saver "
+            "super off-peak window (9 am–3 pm, 8.6 ¢/kWh) and red marks the peak window "
+            "(3–9 pm, 53.8 ¢/kWh). Batteries charged during the green window and discharged in the "
+            "red window deliver the greatest savings.",
+        ])
+        _save_chart(pdf, make_seasonal_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
+                    "Stacked areas: solar self-use (yellow), battery discharge (teal), grid import (blue). "
+                    "Light blue above the load line = solar exported to grid (earns DEBS credits). "
+                    "Green band = cheap super off-peak (9 am–3 pm); red band = expensive peak (3–9 pm).")
 
-        _save(pdf, make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b),
-              "Average battery state-of-charge over the day. The battery charges during midday solar surplus and "
-              "discharges in the evening peak. A fuller battery at 3 pm means greater savings during the "
-              "Midday Saver peak window (15 ¢/kWh).")
+        # ── Section 4: Battery ────────────────────────────────────────────────
+        _text_page(pdf, 4, "Battery State of Charge", [
+            "A battery stores surplus solar energy generated during the day and releases it later — "
+            "typically during the evening peak when grid electricity is most expensive.",
+            "The chart shows the average battery charge level (in kWh) at each hour of the day across "
+            "all four seasons. The dashed horizontal line marks the maximum usable capacity, which is "
+            f"the nameplate size reduced by the depth-of-discharge limit ({BAT_DOD*100:.0f}%) to protect "
+            "battery lifespan.",
+            "Ideally, the battery should be well charged by 3 pm to cover the evening peak. If the "
+            "battery is frequently exhausted before 9 pm, it may be undersized relative to your "
+            "evening demand, or the charging window may need adjustment. A battery that is consistently "
+            "full by midday and still has charge at 9 pm is well-matched to your usage pattern.",
+        ])
+        _save_chart(pdf, make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b),
+                    f"Average battery charge level (kWh) through the day. Dashed line = maximum usable "
+                    f"capacity (nameplate × {BAT_DOD*100:.0f}% DoD limit). Green band = cheap charging "
+                    f"window; red band = peak discharge window.")
 
-        _save(pdf, make_monthly_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
-              "Monthly electricity bills at year-0 tariff rates. Negative values indicate months where export "
-              "credits exceed all charges. Tariff escalation and DEBS decline are captured in the 20-year "
-              "cashflow projections but not shown here.")
+        # ── Section 5: Monthly Bills ──────────────────────────────────────────
+        _text_page(pdf, 5, "Monthly Electricity Bills", [
+            "This section compares estimated monthly electricity bills across the three scenarios, "
+            "calculated at today's tariff rates. It shows the seasonal pattern of savings — solar is "
+            "generally most valuable in summer when days are long and panels produce the most energy.",
+            "Months with bars below $0 indicate that solar export earnings exceed all electricity "
+            "charges for that month — meaning the system effectively earns money rather than costing "
+            "money in those months. This is most common in summer.",
+            f"Important note: this chart uses today's electricity rates. The 20-year financial "
+            f"projections in the following sections account for electricity price escalation "
+            f"({tariff_esc*100:.1f}%/yr) and the gradual decline in DEBS export credits (5%/yr), "
+            f"which significantly affect the long-run economics.",
+        ])
+        _save_chart(pdf, make_monthly_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
+                    f"Monthly electricity bills at year-0 tariff rates. Negative values = export "
+                    f"credits exceed all charges for that month. Seasonal patterns reflect Perth's "
+                    f"strong summer solar resource.")
 
-        _save(pdf, make_payback_fig(pb_a, pb_b, cfg_a, cfg_b),
-              f"Cumulative cashflow in nominal dollars, starting at −[net system cost] in Year 0. The year a "
-              f"line crosses $0 is the nominal payback. Savings grow as electricity prices escalate "
-              f"at {tariff_esc*100:.1f}%/yr and DEBS export credits decline at 5%/yr.")
+        # ── Section 6: Payback & Cash Flow ───────────────────────────────────
+        _text_page(pdf, 6, "Payback Period & Cumulative Cash Flow", [
+            "The most common question about solar and batteries is: when does it pay for itself?",
+            "The payback period is the number of years until your cumulative electricity bill savings "
+            "equal the net purchase price of the system. For example, a 7-year payback on a $15,000 "
+            "net-cost system means you recoup the full investment through reduced bills in 7 years. "
+            "Everything after that is pure profit.",
+            "The three charts on the following pages show this from different angles: (1) raw cumulative "
+            "cashflow showing savings building up from the initial investment; (2) total money spent — "
+            "solar system plus ongoing bills compared to just paying bills indefinitely with no solar; "
+            "and (3) the same total spend adjusted for the time value of money (present value). The "
+            "present-value chart is the most rigorous — it asks whether the investment beats putting "
+            "the money in a bank or investment account instead.",
+        ])
+        _save_chart(pdf, make_payback_fig(pb_a, pb_b, cfg_a, cfg_b),
+                    f"Starts at −[net system cost] in Year 0. The line rises each year as bill savings "
+                    f"accumulate. Where the line crosses $0 is the nominal payback year. Electricity "
+                    f"prices assumed to escalate at {tariff_esc*100:.1f}%/yr; DEBS credits decline 5%/yr.")
+        _save_chart(pdf, make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
+                    "Total money spent: upfront system cost plus all ongoing electricity bills over 20 years. "
+                    "Where a solar/battery line dips below the grey no-solar baseline, the system has paid "
+                    "for itself in total expenditure terms — you are spending less in total than if you had "
+                    "done nothing.")
+        _save_chart(pdf, make_pv_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
+                    f"Same as above, but future bills are discounted to today's dollars at {dr_pct:.1f}%/yr "
+                    f"— representing what you could have earned by investing elsewhere. Crossing below the "
+                    f"grey baseline indicates a positive net present value at this discount rate.")
 
-        _save(pdf, make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
-              "Total cumulative spend (upfront cost + all ongoing electricity bills). Where a solar/battery line "
-              "dips below the grey no-solar baseline, the system has fully recovered its upfront cost in total "
-              "expenditure terms.")
+        # ── Section 7: NPV & IRR ──────────────────────────────────────────────
+        _text_page(pdf, 7, "Net Present Value (NPV) & Internal Rate of Return (IRR)", [
+            "NPV and IRR are the gold-standard metrics for comparing the true value of any investment "
+            "after accounting for the fact that money today is worth more than money in the future "
+            "(because today's money can be invested and grow).",
+            "Net Present Value (NPV): add up all future bill savings, shrink each one back to today's "
+            f"value by discounting at {dr_pct:.1f}%/yr, then subtract the upfront cost. A positive NPV "
+            "means the solar system delivers more value than you'd get by putting the same money in the "
+            "bank at that rate. Larger positive NPV is better.",
+            "Internal Rate of Return (IRR): the effective annual percentage return on your investment — "
+            "analogous to the interest rate a bank account would need to pay to match the solar system. "
+            "For example, an IRR of 12% means solar earns the equivalent of a 12%/yr return. "
+            "Compare to alternatives: term deposits ~4–5%/yr; diversified share portfolio ~8–10%/yr "
+            "long-term. If the IRR exceeds your next best alternative, solar is the better investment.",
+            f"The analysis uses a {ANALYSIS_YEARS}-year horizon and nominal cashflows (future dollar "
+            "values, not adjusted for general inflation).",
+        ])
+        _save_chart(pdf, make_npv_fig(pb_a, pb_b, cfg_a, cfg_b),
+                    f"Each bar = present value of that year's bill savings, discounted at {dr_pct:.1f}%/yr. "
+                    f"The line = running cumulative NPV. Red bar = upfront investment. Final NPV and IRR "
+                    f"are shown in the annotation box. NPV > $0 means the investment beats a "
+                    f"{dr_pct:.1f}%/yr alternative.")
+        _save_chart(pdf, make_npv_sensitivity_fig(pb_a, pb_b, cfg_a, cfg_b),
+                    "Shows how NPV changes if a different discount rate is applied. The dot marks the IRR "
+                    "(where NPV crosses $0). If the IRR dot is to the right of your required return rate, "
+                    "the investment exceeds that hurdle. A steeper downward curve means results are more "
+                    "sensitive to the discount rate assumption.")
 
-        _save(pdf, make_pv_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
-              f"Same as above but future bills discounted to present value at {dr_pct:.1f}%/yr — the return you "
-              f"could earn by investing elsewhere. Crossing below the grey line at a given discount rate indicates "
-              f"a positive net present value.")
-
-        _save(pdf, make_npv_fig(pb_a, pb_b, cfg_a, cfg_b),
-              f"Discounted cash flow over {ANALYSIS_YEARS} years at {dr_pct:.1f}%/yr. Each bar is the present "
-              f"value of that year's bill savings. The line is cumulative NPV. NPV > $0 means the investment "
-              f"outperforms a {dr_pct:.1f}%/yr alternative. IRR is your effective annual return on the investment.")
-
-        _save(pdf, make_npv_sensitivity_fig(pb_a, pb_b, cfg_a, cfg_b),
-              "NPV across a range of discount rates. The dot marks the IRR — where NPV = $0. If the IRR dot is "
-              "to the right of your required return, the investment meets your hurdle rate. A steeper downward "
-              "slope indicates more sensitivity to the discount rate assumption.")
-
-        _save(pdf, _make_summary_table_fig(pb_a, pb_b, cfg_a, cfg_b, tariff_esc, discount_rate),
-              f"Key modelling assumptions: electricity escalation {tariff_esc*100:.1f}%/yr · DEBS decline "
-              f"5%/yr · solar degradation 0.5%/yr · battery degradation 2%/yr · "
-              f"battery DoD {BAT_DOD*100:.0f}% · system efficiency {SYS_EFF*100:.0f}%.")
+        # ── Section 8: Financial Summary ──────────────────────────────────────
+        _text_page(pdf, 8, "Financial Summary & Modelling Assumptions", [
+            "The table on the next page summarises all key financial metrics side by side for both options.",
+            "Modelling assumptions used in all 20-year projections:",
+            f"  •  Electricity price escalation: {tariff_esc*100:.1f}%/yr",
+            f"  •  DEBS export credit decline: 5%/yr (Synergy policy — credits reduce over time)",
+            f"  •  Solar panel output degradation: 0.5%/yr (manufacturer typical warranty)",
+            f"  •  Battery capacity degradation: 2%/yr (lithium battery typical)",
+            f"  •  Battery depth of discharge (DoD): {BAT_DOD*100:.0f}% (protects battery lifespan)",
+            f"  •  System efficiency (inverter + wiring losses): {SYS_EFF*100:.0f}%",
+            f"  •  Discount / opportunity-cost rate: {dr_pct:.1f}%/yr",
+            f"  •  Analysis horizon: {ANALYSIS_YEARS} years",
+        ])
+        _save_chart(pdf, _make_summary_table_fig(pb_a, pb_b, cfg_a, cfg_b, tariff_esc, discount_rate),
+                    "All figures in nominal AUD. Disc. payback = discounted payback period at the chosen "
+                    "opportunity-cost rate. NPV = net present value. IRR = internal rate of return. "
+                    "20yr return = total 20-year savings divided by net system cost (not annualised).")
 
     buf.seek(0)
     return buf.read()
@@ -1073,11 +1237,7 @@ with st.sidebar:
 
     def option_selector(tag: str, default_idx: int):
         colour = "#e8463a" if tag == "A" else "#0f9d58"
-        st.markdown(
-            f"<span style='border-left:4px solid {colour};"
-            f"padding-left:6px;font-weight:bold'>Option {tag}</span>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"**Option {tag}**")
         if solar_quotes is not None and len(solar_quotes) > 0:
             def _fmt(i):
                 r = solar_quotes.iloc[i]
@@ -1267,12 +1427,7 @@ st.caption(
 col_base_m, col_a_m, col_b_m = st.columns(3)
 
 with col_base_m:
-    st.markdown(
-        "<div style='border-left:4px solid gray; padding-left:10px'>"
-        "<b>Status Quo (no solar/battery)</b>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("**Status Quo (no solar/battery)**")
     base_annual = res_base["net_cost"]
     r1, r2 = st.columns(2)
     r1.metric("Annual cost", f"${base_annual:,.0f}")
@@ -1284,12 +1439,8 @@ with col_base_m:
 def metric_col(col, res, pb, cfg, bl, colour):
     annual_saving = bl - res["net_cost"]
     with col:
-        st.markdown(
-            f"<div style='border-left:4px solid {colour}; padding-left:10px'>"
-            f"<b>Option {('A' if colour == OPTION_COLOURS[0] else 'B')}: {cfg['label']}</b>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        _tag = 'A' if colour == OPTION_COLOURS[0] else 'B'
+        st.markdown(f"**Option {_tag}:** {cfg['label']}")
         _dr_pct = pb.get("discount_rate", OPPORTUNITY_RATE) * 100
         _dr     = pb.get("discount_rate", OPPORTUNITY_RATE)
         _npv10  = -pb["net"] + sum(pb["savings"][yr-1] / (1+_dr)**yr for yr in range(1, 11))
@@ -1340,11 +1491,7 @@ with st.expander("🔌 Inverter utilisation detail"):
         peak_chg_kw = df_inv["b_chg"].max() * 2
 
         with col:
-            st.markdown(
-                f"<span style='border-left:4px solid {colour}; padding-left:6px; font-weight:bold'>"
-                f"Option {tag} — {inv_kw:.4g} kW inverter</span>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"**Option {tag} — {inv_kw:.4g} kW inverter**")
             c1, c2 = st.columns(2)
             c1.metric("Discharge limit hit", f"{dis_sat:.0f}% of discharge slots",
                       help=f"Rated discharge: {inv_kw:.4g} kW · Peak recorded: {peak_dis_kw:.1f} kW")
