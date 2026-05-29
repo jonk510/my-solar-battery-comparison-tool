@@ -1298,6 +1298,47 @@ def metric_col(col, res, pb, cfg, bl, colour):
 metric_col(col_a_m, res_a, pb_a, cfg_a, bl_a, OPTION_COLOURS[0])
 metric_col(col_b_m, res_b, pb_b, cfg_b, bl_b, OPTION_COLOURS[1])
 
+with st.expander("🔌 Inverter utilisation detail"):
+    st.caption(
+        "Shows how often the inverter is running at its rated limit during discharge (evening) "
+        "and charge (midday). High saturation % means a larger inverter could improve performance. "
+        "Low saturation means the current size is adequate — upsizing would make little difference."
+    )
+    inv_cols = st.columns(2)
+    for col, res, cfg, colour, tag in [
+        (inv_cols[0], res_a, cfg_a, OPTION_COLOURS[0], "A"),
+        (inv_cols[1], res_b, cfg_b, OPTION_COLOURS[1], "B"),
+    ]:
+        inv_kw  = cfg["inv"]
+        sol_kw  = cfg["solar"]
+        df_inv  = res["df"]
+        dis_lim = inv_kw * 0.5          # kWh per 30-min slot at rated power
+        chg_lim = min(inv_kw, sol_kw) * 0.5
+
+        # Slots where battery was actually doing something
+        dis_active = df_inv["b_dis"] > 0.001
+        chg_active = df_inv["b_chg"] > 0.001
+        dis_sat = (df_inv.loc[dis_active, "b_dis"] >= dis_lim * 0.97).mean() * 100 if dis_active.any() else 0.0
+        chg_sat = (df_inv.loc[chg_active, "b_chg"] >= chg_lim * 0.97).mean() * 100 if chg_active.any() else 0.0
+        peak_dis_kw = df_inv["b_dis"].max() * 2   # kWh/slot → kW
+        peak_chg_kw = df_inv["b_chg"].max() * 2
+
+        with col:
+            st.markdown(
+                f"<span style='border-left:4px solid {colour}; padding-left:6px; font-weight:bold'>"
+                f"Option {tag} — {inv_kw:.4g} kW inverter</span>",
+                unsafe_allow_html=True,
+            )
+            c1, c2 = st.columns(2)
+            c1.metric("Discharge limit hit", f"{dis_sat:.0f}% of discharge slots",
+                      help=f"Rated discharge: {inv_kw:.4g} kW · Peak recorded: {peak_dis_kw:.1f} kW")
+            c2.metric("Charge limit hit", f"{chg_sat:.0f}% of charge slots",
+                      help=f"Rated charge: {min(inv_kw, sol_kw):.4g} kW · Peak recorded: {peak_chg_kw:.1f} kW")
+            st.caption(
+                f"Rated discharge: **{inv_kw:.4g} kW** · Peak seen: **{peak_dis_kw:.1f} kW**  |  "
+                f"Rated charge: **{min(inv_kw, sol_kw):.4g} kW** · Peak seen: **{peak_chg_kw:.1f} kW**"
+            )
+
 # ── Consumption heatmap ───────────────────────────────────────────────────────
 st.divider()
 st.subheader("Consumption Heatmap — Month × Hour of Day")
