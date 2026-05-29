@@ -1155,7 +1155,7 @@ with st.sidebar:
     if apply_inflation:
         tariff_esc_pct = st.slider(
             "Electricity price inflation (%/yr)",
-            min_value=0.0, max_value=10.0, value=6.5, step=0.5,
+            min_value=0.0, max_value=10.0, value=4.0, step=0.5,
             help="Synergy A1 rate rose from ~12.5 ¢/kWh (2009) to ~31.7 ¢/kWh (2024) — "
                  "a 15-year compound average of ~6.4%/yr. "
                  "Use 2–3% for a conservative view, 6–7% for the historical WA average.",
