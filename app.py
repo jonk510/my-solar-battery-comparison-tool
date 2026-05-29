@@ -192,6 +192,21 @@ def cached_payback(raw_df_hash, solar_kw, bat_kwh, inv_kw, cost, tariff, label,
 
 
 @st.cache_data(show_spinner=False)
+def cached_build_pdf(
+    raw_df_hash,
+    solar_a, bat_a, inv_a, tariff_a,
+    solar_b, bat_b, inv_b, tariff_b,
+    shade_s, shade_au, shade_w,
+    tariff_esc, discount_rate,
+    _raw_df, _res_a, _res_b, _res_base, _pb_a, _pb_b, _cfg_a, _cfg_b,
+):
+    return _build_pdf(
+        _raw_df, _res_a, _res_b, _res_base, _pb_a, _pb_b,
+        _cfg_a, _cfg_b, shade_s, shade_au, shade_w, tariff_esc, discount_rate,
+    )
+
+
+@st.cache_data(show_spinner=False)
 def cached_simulate_no_solar(raw_df_hash, tariff, _raw_df):
     df = _raw_df.copy()
     df["solar_kwh"] = 0.0
@@ -1527,29 +1542,25 @@ st.caption(
 st.divider()
 st.subheader("📄 Download Report")
 st.caption(
-    "Export all charts, tables, and explanatory text as a single PDF. "
-    "The report includes every chart shown above plus a financial summary table and cover page."
+    "Full report: cover page, all charts, financial summary table, and explanatory captions. "
+    "Generated once per unique set of inputs — subsequent downloads are instant."
 )
-if st.button("Generate PDF Report", type="primary"):
-    with st.spinner("Building report — this may take 5–10 seconds…"):
-        try:
-            st.session_state["_pdf_bytes"] = _build_pdf(
-                raw_df, res_a, res_b, res_base, pb_a, pb_b,
-                cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
-                tariff_esc, discount_rate,
-            )
-            st.session_state["_pdf_error"] = None
-        except Exception as _e:
-            st.session_state["_pdf_bytes"] = None
-            st.session_state["_pdf_error"] = str(_e)
-
-if st.session_state.get("_pdf_error"):
-    st.error(f"PDF generation failed: {st.session_state['_pdf_error']}")
-
-if st.session_state.get("_pdf_bytes"):
-    st.download_button(
-        "⬇️ Download PDF Report",
-        data=st.session_state["_pdf_bytes"],
-        file_name="solar_battery_report.pdf",
-        mime="application/pdf",
-    )
+with st.spinner("Preparing PDF report…"):
+    try:
+        _pdf_bytes = cached_build_pdf(
+            raw_hash,
+            cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
+            cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
+            shade_summer, shade_autumn, shade_winter,
+            tariff_esc, discount_rate,
+            raw_df, res_a, res_b, res_base, pb_a, pb_b, cfg_a, cfg_b,
+        )
+        st.download_button(
+            "⬇️ Download PDF Report",
+            data=_pdf_bytes,
+            file_name="solar_battery_report.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
+    except Exception as _e:
+        st.error(f"PDF generation failed — {_e}")
