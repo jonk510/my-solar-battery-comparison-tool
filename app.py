@@ -965,9 +965,18 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.title("☀️ Solar + Battery Comparison")
+st.markdown(
+    "Compare two solar and battery quotes side-by-side using your **actual Synergy half-hourly consumption data**. "
+    "The tool simulates how each system would perform against your real usage — including seasonal variation, "
+    "battery cycling, DEBS export credits, and 20-year financial projections with panel and battery degradation."
+)
 
 if raw_df is None:
-    st.info("Upload your Synergy half-hourly meter data in the sidebar to get started.")
+    st.info(
+        "**To get started:** download your half-hourly meter data from "
+        "[MyAccount](https://myaccount.synergy.net.au) (Manage Account → Usage & Payments → "
+        "Download consumption data), then upload the file in the sidebar."
+    )
     st.stop()
 
 if not run:
@@ -1012,6 +1021,13 @@ bl_b = baseline(add_solar_shaded(raw_df, cfg_b["solar"], *shading), cfg_b["tarif
 
 # ── Metric cards ─────────────────────────────────────────────────────────────
 st.subheader("Key Metrics")
+st.caption(
+    "Year-1 snapshot based on your uploaded meter data and current tariff rates. "
+    "**Annual saving** = reduction in electricity bills vs no solar. "
+    "**Self-sufficiency** = share of your load met by solar + battery (not from the grid). "
+    "**NPV** = net value of the investment in today's dollars over 20 years (positive = better than the bank). "
+    "**20-yr total return** = total savings ÷ net system cost (not annualised)."
+)
 col_base_m, col_a_m, col_b_m = st.columns(3)
 
 with col_base_m:
@@ -1113,13 +1129,23 @@ st.dataframe(
 # ── Payback / cashflow ────────────────────────────────────────────────────────
 st.divider()
 st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Cash-Flow")
-
+st.caption(
+    "Starts at −[net system cost] in Year 0 (the upfront investment). "
+    "Each year the line rises by that year's bill savings. "
+    "The point where a line crosses **$0** is the **nominal payback year** — when cumulative savings have recovered the purchase price. "
+    "Future savings include electricity price escalation and export credit changes, but are shown in nominal (not inflation-adjusted) dollars."
+)
 with st.spinner("Generating payback chart…"):
     fig_pb = make_payback_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_pb, use_container_width=True)
 plt.close(fig_pb)
 
 st.subheader(f"{ANALYSIS_YEARS}-Year Cumulative Total Spend")
+st.caption(
+    "Total money out of pocket over 20 years: upfront system cost plus all ongoing electricity bills. "
+    "The grey dashed line is the no-solar baseline — bills only, no upfront cost. "
+    "Where a solar/battery line dips **below** the grey line, the system has paid for itself in total spend terms."
+)
 with st.spinner("Generating total spend chart…"):
     fig_ts = make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_ts, use_container_width=True)
@@ -1140,11 +1166,12 @@ st.divider()
 _dr_pct_main = pb_a.get("discount_rate", OPPORTUNITY_RATE) * 100
 st.subheader("NPV Analysis")
 st.caption(
-    f"**Net Present Value (NPV)** = total value of the investment in today's dollars, "
+    f"**Net Present Value (NPV)** = total value of the investment in today's dollars **over {ANALYSIS_YEARS} years**, "
     f"discounting future savings at {_dr_pct_main:.1f}%/yr (your opportunity-cost rate). "
-    f"NPV > $0 means the investment beats what you'd earn by keeping the money in the bank. "
-    f"**IRR** (Internal Rate of Return) is the effective annual return on your investment — "
-    f"the discount rate at which NPV = $0. Compare it to your next-best alternative."
+    f"A positive NPV means the system earns more than you'd get by investing the same money elsewhere at that rate. "
+    f"**IRR** (Internal Rate of Return) is your effective annual return — the rate at which NPV = $0. "
+    f"Compare it to alternatives: term deposit ~4–5%, diversified ETF ~8–10%. "
+    f"The waterfall bars show the present value of each year's savings; the line is the running total."
 )
 with st.spinner("Generating DCF chart…"):
     fig_npv = make_npv_fig(pb_a, pb_b, cfg_a, cfg_b)
@@ -1153,16 +1180,26 @@ plt.close(fig_npv)
 
 st.subheader("NPV Sensitivity to Discount Rate")
 st.caption(
-    "Shows how NPV changes across a range of discount rates. "
-    "The dot marks the IRR (where NPV = $0). "
-    "If your required return is to the left of the dot, the investment makes sense at that hurdle."
+    f"Shows how NPV changes if you used a different discount rate. "
+    f"The **dot** marks the IRR — where NPV = $0 and the line crosses the x-axis. "
+    f"The **dashed vertical line** is your current rate ({_dr_pct_main:.1f}%). "
+    f"If the dot (IRR) is **to the right** of the dashed line, the investment outperforms your hurdle rate — it's worth doing."
 )
 with st.spinner("Generating sensitivity chart…"):
     fig_npv_sens = make_npv_sensitivity_fig(pb_a, pb_b, cfg_a, cfg_b)
 st.pyplot(fig_npv_sens, use_container_width=True)
 plt.close(fig_npv_sens)
 
-# Payback detail table
+st.subheader("Payback & Financial Summary")
+st.caption(
+    f"Key modelling assumptions: "
+    f"electricity price escalation {tariff_esc*100:.1f}%/yr · "
+    f"DEBS export credits decline 5%/yr · "
+    f"solar panel output degrades 0.5%/yr · "
+    f"battery capacity degrades 2%/yr · "
+    f"battery depth of discharge (DoD) {BAT_DOD*100:.0f}% · "
+    f"system efficiency (inverter + wiring losses) {SYS_EFF*100:.0f}%."
+)
 pb_rows = []
 for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
     inc = cfg.get("rebates_inc", False)
