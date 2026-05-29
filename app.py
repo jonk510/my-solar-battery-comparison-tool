@@ -652,6 +652,41 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
     return fig
 
 
+def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
+    """Heatmap: months on y-axis, hours of day on x-axis, cell = avg kWh per 30-min slot."""
+    df = raw_df.copy()
+    df["month"] = df["datetime"].dt.month
+    df["hour"]  = df["datetime"].dt.hour
+    pivot = (
+        df.groupby(["month", "hour"])["consumption_kwh"]
+          .mean()
+          .unstack("hour")
+          .reindex(index=range(1, 13), columns=range(24))
+    )
+    month_labels = ["Jan","Feb","Mar","Apr","May","Jun",
+                    "Jul","Aug","Sep","Oct","Nov","Dec"]
+    fig, ax = plt.subplots(figsize=(13, 5))
+    fig.patch.set_facecolor("white")
+    im = ax.imshow(pivot.values, aspect="auto", cmap="YlOrRd", interpolation="nearest")
+    # White gridlines between cells
+    ax.set_xticks(np.arange(-0.5, 24, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, 12, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=0.5)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    cbar = fig.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label("Avg kWh / 30-min slot", fontsize=9)
+    ax.set_yticks(range(12))
+    ax.set_yticklabels(month_labels, fontsize=9)
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)],
+                       fontsize=8, rotation=45, ha="right")
+    ax.set_xlabel("Hour of day", fontsize=9)
+    ax.set_title("Average Electricity Consumption — Month × Hour of Day",
+                 fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
 def make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b) -> plt.Figure:
     """4×2 grid: rows = seasons, cols = [Option A | Option B].
     Shows the typical average battery state of charge over the day per season."""
@@ -741,6 +776,172 @@ def make_seasonal_energy_table(res_a, res_b) -> pd.DataFrame:
                 row[f"Option {tag} Avg Daily Solar (kWh)"] = round(daily["solar_kwh"].mean(), 1)
         rows.append(row)
     return pd.DataFrame(rows).set_index("Season")
+
+
+def _make_summary_table_fig(pb_a, pb_b, cfg_a, cfg_b, tariff_esc, discount_rate) -> plt.Figure:
+    """One-page financial summary table for the PDF report."""
+    import matplotlib.colors as mcolors
+    dr     = pb_a.get("discount_rate", OPPORTUNITY_RATE)
+    dr_pct = dr * 100
+    rows = []
+    for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
+        npv10 = -pb["net"] + sum(pb["savings"][yr-1] / (1+dr)**yr for yr in range(1, 11))
+        irr   = compute_irr(pb)
+        rows.append([
+            f"Option {tag}  ·  {cfg['tariff']}",
+            f"${pb['net']:,.0f}",
+            f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
+            f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
+            f"${npv10:,.0f}",
+            f"${pb['npv']:,.0f}",
+            f"{irr*100:.1f}%" if irr else "N/A",
+            f"${pb['total_save']:,.0f}",
+            f"{pb['roi']:.0f}%",
+            f"${pb['yr1_save']:,.0f}",
+        ])
+    col_labels = [
+        "Option / Tariff", "Net Cost",
+        "Nominal\nPayback", f"Disc. Payback\n({dr_pct:.1f}%)",
+        f"NPV 10yr\n@ {dr_pct:.1f}%", f"NPV 20yr\n@ {dr_pct:.1f}%",
+        "IRR", "20yr Saving", "20yr Return", "Yr-1 Saving",
+    ]
+    fig, ax = plt.subplots(figsize=(14, 3.5))
+    fig.patch.set_facecolor("white")
+    ax.axis("off")
+    tbl = ax.table(cellText=rows, colLabels=col_labels, cellLoc="center", loc="center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 2.5)
+    for c in range(len(col_labels)):
+        tbl[0, c].set_facecolor("#1c2b3a")
+        tbl[0, c].set_text_props(color="white", fontweight="bold")
+    light_a = (*mcolors.to_rgb(OPTION_COLOURS[0]), 0.15)
+    light_b = (*mcolors.to_rgb(OPTION_COLOURS[1]), 0.15)
+    for c in range(len(col_labels)):
+        tbl[1, c].set_facecolor(light_a)
+        tbl[2, c].set_facecolor(light_b)
+    ax.set_title("Financial Summary", fontsize=13, fontweight="bold", pad=20)
+    fig.tight_layout()
+    return fig
+
+
+def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
+               cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
+               tariff_esc, discount_rate) -> bytes:
+    """Compile all charts + explanatory text into a multi-page PDF."""
+    import io as _io
+    import textwrap
+    from datetime import date
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    dr      = pb_a.get("discount_rate", OPPORTUNITY_RATE)
+    dr_pct  = dr * 100
+    today   = date.today().strftime("%d %B %Y")
+    cfg_base_local = {"label": "Status Quo", "tariff": cfg_a["tariff"]}
+
+    def _save(pdf, fig, caption=""):
+        if caption:
+            fig.subplots_adjust(bottom=0.13)
+            wrapped = "\n".join(textwrap.wrap(caption, 145))
+            fig.text(0.03, 0.005, wrapped, fontsize=7.5, va="bottom",
+                     color="#555555", style="italic")
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+    buf = _io.BytesIO()
+    with PdfPages(buf) as pdf:
+
+        # Cover page
+        fig = plt.figure(figsize=(11.69, 8.27))
+        fig.patch.set_facecolor("#1c2b3a")
+        fig.text(0.5, 0.85, "Solar & Battery Investment Report",
+                 ha="center", fontsize=26, fontweight="bold", color="white")
+        fig.text(0.5, 0.75, "Perth, Western Australia  ·  Synergy Network",
+                 ha="center", fontsize=13, color="#aabccc")
+        fig.text(0.5, 0.67, f"Generated: {today}",
+                 ha="center", fontsize=11, color="#aabccc")
+        for xi, pb, cfg, col in [
+            (0.27, pb_a, cfg_a, OPTION_COLOURS[0]),
+            (0.73, pb_b, cfg_b, OPTION_COLOURS[1]),
+        ]:
+            tag   = "A" if xi < 0.5 else "B"
+            irr   = compute_irr(pb)
+            irr_s = f"{irr*100:.1f}%" if irr else "N/A"
+            npv10 = -pb["net"] + sum(pb["savings"][yr-1]/(1+dr)**yr for yr in range(1, 11))
+            ax = fig.add_axes([xi - 0.19, 0.05, 0.38, 0.54])
+            ax.set_facecolor(col); ax.set_xlim(0,1); ax.set_ylim(0,1); ax.axis("off")
+            for y2, txt, fs, fw in [
+                (0.92, f"Option {tag}", 13, "bold"),
+                (0.82, cfg["label"][:48], 8.5, "normal"),
+                (0.70, f"Net system cost:  ${pb['net']:,.0f}", 10, "normal"),
+                (0.59, (f"Nominal payback:  {pb['pb_yr']} yr" if pb["pb_yr"] else "Nominal payback:  >20 yr"), 10, "normal"),
+                (0.48, f"NPV 10yr @ {dr_pct:.0f}%:  ${npv10:,.0f}", 10, "normal"),
+                (0.37, f"NPV 20yr @ {dr_pct:.0f}%:  ${pb['npv']:,.0f}", 10, "normal"),
+                (0.26, f"IRR:  {irr_s}", 10, "normal"),
+                (0.15, f"20-yr return:  {pb['roi']:.0f}%", 10, "normal"),
+                (0.05, f"Year-1 saving:  ${pb['yr1_save']:,.0f}", 10, "normal"),
+            ]:
+                ax.text(0.5, y2, txt, ha="center", va="center",
+                        fontsize=fs, fontweight=fw, color="white")
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
+        _save(pdf, make_load_heatmap_fig(raw_df),
+              "Average electricity consumption by month and hour of day. Darker cells = higher demand. "
+              "Evening peaks (5–9 pm) and morning peaks (6–8 am) are typical in Perth households. "
+              "Solar generation occurs roughly 7 am – 5 pm; battery storage bridges the gap to the evening peak.")
+
+        _save(pdf, make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter),
+              "Theoretical solar output by season. Dashed = unshaded; solid = with your shading factors applied. "
+              "The gap between dashed and solid shows generation lost to obstructions. Winter output is lower due "
+              "to Perth's shorter days and lower solar elevation angle at 32° S latitude.")
+
+        _save(pdf, make_seasonal_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
+              "Average half-hourly energy flows per season. Stacked areas: solar self-use (yellow), battery "
+              "discharge (teal), grid import (blue). Export above the load line earns DEBS credits. "
+              "Green shading = super off-peak 9 am–3 pm; red = peak 3–9 pm.")
+
+        _save(pdf, make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b),
+              "Average battery state-of-charge over the day. The battery charges during midday solar surplus and "
+              "discharges in the evening peak. A fuller battery at 3 pm means greater savings during the "
+              "Midday Saver peak window (15 ¢/kWh).")
+
+        _save(pdf, make_monthly_fig(res_base, res_a, res_b, cfg_base_local, cfg_a, cfg_b),
+              "Monthly electricity bills at year-0 tariff rates. Negative values indicate months where export "
+              "credits exceed all charges. Tariff escalation and DEBS decline are captured in the 20-year "
+              "cashflow projections but not shown here.")
+
+        _save(pdf, make_payback_fig(pb_a, pb_b, cfg_a, cfg_b),
+              f"Cumulative cashflow in nominal dollars, starting at −[net system cost] in Year 0. The year a "
+              f"line crosses $0 is the nominal payback. Savings grow as electricity prices escalate "
+              f"at {tariff_esc*100:.1f}%/yr and DEBS export credits decline at 5%/yr.")
+
+        _save(pdf, make_total_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
+              "Total cumulative spend (upfront cost + all ongoing electricity bills). Where a solar/battery line "
+              "dips below the grey no-solar baseline, the system has fully recovered its upfront cost in total "
+              "expenditure terms.")
+
+        _save(pdf, make_pv_spend_fig(pb_a, pb_b, cfg_a, cfg_b),
+              f"Same as above but future bills discounted to present value at {dr_pct:.1f}%/yr — the return you "
+              f"could earn by investing elsewhere. Crossing below the grey line at a given discount rate indicates "
+              f"a positive net present value.")
+
+        _save(pdf, make_npv_fig(pb_a, pb_b, cfg_a, cfg_b),
+              f"Discounted cash flow over {ANALYSIS_YEARS} years at {dr_pct:.1f}%/yr. Each bar is the present "
+              f"value of that year's bill savings. The line is cumulative NPV. NPV > $0 means the investment "
+              f"outperforms a {dr_pct:.1f}%/yr alternative. IRR is your effective annual return on the investment.")
+
+        _save(pdf, make_npv_sensitivity_fig(pb_a, pb_b, cfg_a, cfg_b),
+              "NPV across a range of discount rates. The dot marks the IRR — where NPV = $0. If the IRR dot is "
+              "to the right of your required return, the investment meets your hurdle rate. A steeper downward "
+              "slope indicates more sensitivity to the discount rate assumption.")
+
+        _save(pdf, _make_summary_table_fig(pb_a, pb_b, cfg_a, cfg_b, tariff_esc, discount_rate),
+              f"Key modelling assumptions: electricity escalation {tariff_esc*100:.1f}%/yr · DEBS decline "
+              f"5%/yr · solar degradation 0.5%/yr · battery degradation 2%/yr · "
+              f"battery DoD {BAT_DOD*100:.0f}% · system efficiency {SYS_EFF*100:.0f}%.")
+
+    buf.seek(0)
+    return buf.read()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1078,6 +1279,19 @@ def metric_col(col, res, pb, cfg, bl, colour):
 metric_col(col_a_m, res_a, pb_a, cfg_a, bl_a, OPTION_COLOURS[0])
 metric_col(col_b_m, res_b, pb_b, cfg_b, bl_b, OPTION_COLOURS[1])
 
+# ── Consumption heatmap ───────────────────────────────────────────────────────
+st.divider()
+st.subheader("Consumption Heatmap — Month × Hour of Day")
+st.caption(
+    "Average electricity consumption (kWh per 30-min slot) across all days in your data, "
+    "grouped by month and hour. Darker cells indicate higher demand. "
+    "Comparing this against the solar generation window (~7 am – 5 pm) shows how much "
+    "of your load can be met directly by solar vs battery storage or grid import."
+)
+fig_hm = make_load_heatmap_fig(raw_df)
+st.pyplot(fig_hm, use_container_width=True)
+plt.close(fig_hm)
+
 # ── Solar generation profiles ────────────────────────────────────────────────
 st.divider()
 st.subheader("Solar Generation Profiles by Season")
@@ -1247,3 +1461,24 @@ st.caption(
     f"not reflected in the monthly chart (year-0 rates shown). "
     f"Payback figures above do account for these trends over {ANALYSIS_YEARS} years."
 )
+
+# ── PDF Report ────────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("📄 Download Report")
+st.caption(
+    "Export all charts, tables, and explanatory text as a single PDF. "
+    "The report includes every chart shown above plus a financial summary table and cover page."
+)
+if st.button("Generate PDF Report", type="primary"):
+    with st.spinner("Building report — this may take 5–10 seconds…"):
+        _pdf_bytes = _build_pdf(
+            raw_df, res_a, res_b, res_base, pb_a, pb_b,
+            cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
+            tariff_esc, discount_rate,
+        )
+    st.download_button(
+        "⬇️ Download PDF Report",
+        data=_pdf_bytes,
+        file_name="solar_battery_report.pdf",
+        mime="application/pdf",
+    )
