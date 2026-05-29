@@ -1054,11 +1054,17 @@ def metric_col(col, res, pb, cfg, bl, colour):
             f"</div>",
             unsafe_allow_html=True,
         )
-        r1, r2, r3 = st.columns(3)
         _dr_pct = pb.get("discount_rate", OPPORTUNITY_RATE) * 100
+        _dr     = pb.get("discount_rate", OPPORTUNITY_RATE)
+        _npv10  = -pb["net"] + sum(pb["savings"][yr-1] / (1+_dr)**yr for yr in range(1, 11))
+
+        r1, r2 = st.columns(2)
         r1.metric("Annual saving", f"${annual_saving:,.0f}")
         r2.metric("Nominal payback", f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr")
-        r3.metric(f"NPV @ {_dr_pct:.0f}%", f"${pb['npv']:,.0f}")
+
+        rn1, rn2 = st.columns(2)
+        rn1.metric(f"NPV 10yr @ {_dr_pct:.0f}%", f"${_npv10:,.0f}")
+        rn2.metric(f"NPV 20yr @ {_dr_pct:.0f}%", f"${pb['npv']:,.0f}")
 
         r4, r5, r6 = st.columns(3)
         r4.metric("20-yr saving", f"${pb['total_save']:,.0f}")
@@ -1202,7 +1208,10 @@ st.caption(
 )
 pb_rows = []
 for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
-    inc = cfg.get("rebates_inc", False)
+    inc    = cfg.get("rebates_inc", False)
+    _dr    = pb.get("discount_rate", OPPORTUNITY_RATE)
+    _drpct = _dr * 100
+    _npv10 = -pb["net"] + sum(pb["savings"][yr-1] / (1+_dr)**yr for yr in range(1, 11))
     pb_rows.append({
         "Option": f"{tag}: {cfg['label']}",
         "Tariff": cfg["tariff"],
@@ -1212,9 +1221,10 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
         "  – Federal battery rebate": "included in quote" if inc else f"-${pb.get('fed', 0):,.0f}",
         "Purchase price (net)": f"${pb['net']:,.0f}",
         "Nominal payback": f"{pb['pb_yr']} yr" if pb["pb_yr"] else ">20 yr",
-        f"Disc. payback ({pb.get('discount_rate', OPPORTUNITY_RATE)*100:.1f}%)":
+        f"Disc. payback ({_drpct:.1f}%)":
             f"{pb['pb_yr_disc']} yr" if pb.get("pb_yr_disc") else ">20 yr",
-        f"NPV @ {pb.get('discount_rate', OPPORTUNITY_RATE)*100:.1f}%": f"${pb['npv']:,.0f}",
+        f"NPV 10yr @ {_drpct:.1f}%": f"${_npv10:,.0f}",
+        f"NPV 20yr @ {_drpct:.1f}%": f"${pb['npv']:,.0f}",
         "IRR": (lambda r: f"{r*100:.1f}%" if r is not None else "N/A")(compute_irr(pb)),
         "20-yr saving": f"${pb['total_save']:,.0f}",
         "20-yr total return": f"{pb['roi']:.0f}%",
