@@ -1490,14 +1490,16 @@ st.caption(
 )
 if st.button("Generate PDF Report", type="primary"):
     with st.spinner("Building report — this may take 5–10 seconds…"):
-        _pdf_bytes = _build_pdf(
+        st.session_state["_pdf_bytes"] = _build_pdf(
             raw_df, res_a, res_b, res_base, pb_a, pb_b,
             cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
             tariff_esc, discount_rate,
         )
+
+if st.session_state.get("_pdf_bytes"):
     st.download_button(
         "⬇️ Download PDF Report",
-        data=_pdf_bytes,
+        data=st.session_state["_pdf_bytes"],
         file_name="solar_battery_report.pdf",
         mime="application/pdf",
     )
