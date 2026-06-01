@@ -668,48 +668,108 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
 
 
 def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
-    """Heatmap: months on y-axis, hours of day on x-axis, cell = avg kWh per 30-min slot."""
+    """Heatmap: months on y-axis, hours of day on x-axis, cell = avg kWh per 30-min slot.
+    Right column = average daily total (kWh/day) per month.
+    Bottom row = average kWh/slot per hour across all months."""
+    from matplotlib.gridspec import GridSpec
+
     df = raw_df.copy()
     df["month"] = df["datetime"].dt.month
     df["hour"]  = df["datetime"].dt.hour
+
     pivot = (
         df.groupby(["month", "hour"])["consumption_kwh"]
           .mean()
           .unstack("hour")
           .reindex(index=range(1, 13), columns=range(24))
     )
+
+    # Row totals: true average daily kWh per month (sum all 48 half-hour slots each day)
+    row_totals = (
+        df.groupby(["date", "month"])["consumption_kwh"]
+          .sum()
+          .groupby(level="month")
+          .mean()
+          .reindex(range(1, 13))
+    )
+    # Column totals: average kWh/slot for each hour, averaged across months (same unit as cells)
+    col_totals = pivot.mean(axis=0)
+
     month_labels = ["Jan","Feb","Mar","Apr","May","Jun",
                     "Jul","Aug","Sep","Oct","Nov","Dec"]
-    fig, ax = plt.subplots(figsize=(18, 7))
+
+    fig = plt.figure(figsize=(21, 8))
     fig.patch.set_facecolor("white")
+    gs = GridSpec(2, 2, figure=fig,
+                  width_ratios=[22, 2], height_ratios=[11, 1],
+                  wspace=0.02, hspace=0.03)
+    ax_main   = fig.add_subplot(gs[0, 0])
+    ax_right  = fig.add_subplot(gs[0, 1])
+    ax_bottom = fig.add_subplot(gs[1, 0])
+    ax_corner = fig.add_subplot(gs[1, 1])
+    ax_corner.axis("off")
+
+    # ── Main heatmap ──────────────────────────────────────────────────────────
     data = pivot.values
-    im = ax.imshow(data, aspect="auto", cmap="YlOrRd", interpolation="nearest")
-    # White gridlines between cells
-    ax.set_xticks(np.arange(-0.5, 24, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, 12, 1), minor=True)
-    ax.grid(which="minor", color="white", linewidth=0.5)
-    ax.tick_params(which="minor", bottom=False, left=False)
-    # Cell value annotations — white text on dark cells, dark text on light cells
     vmax = np.nanmax(data)
+    im = ax_main.imshow(data, aspect="auto", cmap="YlOrRd", interpolation="nearest")
+    ax_main.set_xticks(np.arange(-0.5, 24, 1), minor=True)
+    ax_main.set_yticks(np.arange(-0.5, 12, 1), minor=True)
+    ax_main.grid(which="minor", color="white", linewidth=0.5)
+    ax_main.tick_params(which="minor", bottom=False, left=False)
     threshold = vmax * 0.55
-    for row in range(12):
-        for col in range(24):
-            val = data[row, col]
+    for r in range(12):
+        for c in range(24):
+            val = data[r, c]
             if np.isnan(val):
                 continue
-            txt_col = "white" if val > threshold else "#333333"
-            ax.text(col, row, f"{val:.2f}", ha="center", va="center",
-                    fontsize=5.5, color=txt_col, fontweight="bold")
-    cbar = fig.colorbar(im, ax=ax, pad=0.02)
-    cbar.set_label("Avg kWh / 30-min slot", fontsize=9)
-    ax.set_yticks(range(12))
-    ax.set_yticklabels(month_labels, fontsize=9)
-    ax.set_xticks(range(0, 24, 2))
-    ax.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)],
-                       fontsize=8, rotation=45, ha="right")
-    ax.set_xlabel("Hour of day", fontsize=9)
-    ax.set_title("Average Electricity Consumption — Month × Hour of Day",
-                 fontsize=11, fontweight="bold")
+            ax_main.text(c, r, f"{val:.2f}", ha="center", va="center",
+                         fontsize=5.5, fontweight="bold",
+                         color="white" if val > threshold else "#333333")
+    cbar = fig.colorbar(im, ax=ax_main, pad=0.01, fraction=0.015)
+    cbar.set_label("Avg kWh / 30-min slot", fontsize=8)
+    ax_main.set_yticks(range(12))
+    ax_main.set_yticklabels(month_labels, fontsize=9)
+    ax_main.set_xticks(range(0, 24, 2))
+    ax_main.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)],
+                             fontsize=8, rotation=45, ha="right")
+    ax_main.set_title("Average Electricity Consumption — Month × Hour of Day",
+                      fontsize=11, fontweight="bold")
+
+    # ── Right column: daily average total per month ───────────────────────────
+    rt = row_totals.values.reshape(12, 1)
+    rt_max = np.nanmax(rt)
+    ax_right.imshow(rt, aspect="auto", cmap="Blues", interpolation="nearest",
+                    vmin=0, vmax=rt_max * 1.05)
+    ax_right.set_xticks([0])
+    ax_right.set_xticklabels(["Daily avg\n(kWh/day)"], fontsize=7)
+    ax_right.set_yticks([])
+    ax_right.tick_params(which="both", left=False, bottom=False)
+    rt_thresh = rt_max * 0.55
+    for r in range(12):
+        val = rt[r, 0]
+        if not np.isnan(val):
+            ax_right.text(0, r, f"{val:.1f}", ha="center", va="center",
+                          fontsize=7.5, fontweight="bold",
+                          color="white" if val > rt_thresh else "#333333")
+
+    # ── Bottom row: hourly average across all months ──────────────────────────
+    ct = col_totals.values.reshape(1, 24)
+    ct_max = np.nanmax(ct)
+    ax_bottom.imshow(ct, aspect="auto", cmap="Blues", interpolation="nearest",
+                     vmin=0, vmax=ct_max * 1.05)
+    ax_bottom.set_yticks([0])
+    ax_bottom.set_yticklabels(["All-month\navg"], fontsize=7)
+    ax_bottom.set_xticks([])
+    ax_bottom.tick_params(which="both", left=False, bottom=False)
+    ct_thresh = ct_max * 0.55
+    for c in range(24):
+        val = ct[0, c]
+        if not np.isnan(val):
+            ax_bottom.text(c, 0, f"{val:.2f}", ha="center", va="center",
+                           fontsize=5.5, fontweight="bold",
+                           color="white" if val > ct_thresh else "#333333")
+
     fig.tight_layout()
     return fig
 
