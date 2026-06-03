@@ -682,7 +682,7 @@ def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
           .mean()
           .unstack("hour")
           .reindex(index=range(1, 13), columns=range(24))
-    )
+    ) * 2   # ×2: two 30-min slots per hour → convert to kWh/hour
 
     # Row totals: true average daily kWh per month (sum all 48 half-hour slots each day)
     row_totals = (
@@ -692,7 +692,7 @@ def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
           .mean()
           .reindex(range(1, 13))
     )
-    # Column totals: average kWh/slot for each hour, averaged across months (same unit as cells)
+    # Column totals: average kWh/hour for each hour, averaged across months
     col_totals = pivot.mean(axis=0)
 
     month_labels = ["Jan","Feb","Mar","Apr","May","Jun",
@@ -727,7 +727,7 @@ def make_load_heatmap_fig(raw_df: pd.DataFrame) -> plt.Figure:
                          fontsize=5.5, fontweight="bold",
                          color="white" if val > threshold else "#333333")
     cbar = fig.colorbar(im, ax=ax_main, pad=0.01, fraction=0.015)
-    cbar.set_label("Avg kWh / 30-min slot", fontsize=8)
+    cbar.set_label("Avg kWh / hour", fontsize=8)
     ax_main.set_yticks(range(12))
     ax_main.set_yticklabels(month_labels, fontsize=9)
     ax_main.set_xticks(range(0, 24, 2))
@@ -1040,9 +1040,8 @@ def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
             "releases it into the expensive evening peak window.",
         ])
         _save_chart(pdf, make_load_heatmap_fig(raw_df),
-                    "Each cell shows average electricity use (kWh per 30-min interval) in a given month "
-                    "and hour of day. Darker orange/red = higher consumption. Solar generation window is "
-                    "roughly 7 am – 5 pm.")
+                    "Each cell shows average electricity use (kWh per hour) in a given month and hour "
+                    "of day. Darker orange/red = higher consumption. Solar generation window is roughly 7 am – 5 pm.")
 
         # ── Section 2: Solar Generation ──────────────────────────────────────
         _text_page(pdf, 2, "Solar Generation by Season", [
@@ -1566,8 +1565,8 @@ with st.expander("🔌 Inverter utilisation detail"):
 st.divider()
 st.subheader("Consumption Heatmap — Month × Hour of Day")
 st.caption(
-    "Average electricity consumption (kWh per 30-min slot) across all days in your data, "
-    "grouped by month and hour. Darker cells indicate higher demand. "
+    "Average electricity consumption (kWh per hour) across all days in your data, "
+    "grouped by month and hour of day. Darker cells indicate higher demand. "
     "Comparing this against the solar generation window (~7 am – 5 pm) shows how much "
     "of your load can be met directly by solar vs battery storage or grid import."
 )
