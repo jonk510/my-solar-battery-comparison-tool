@@ -283,7 +283,7 @@ def make_seasonal_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b
         (res_b,    costs_b,    OPTION_COLOURS[1], f"Option B: {cfg_b['label']}"),
     ]
 
-    fig, axes = plt.subplots(4, 3, figsize=(18, 18), sharey="row")
+    fig, axes = plt.subplots(4, 3, figsize=(18, 18), sharey=True)
     fig.patch.set_facecolor("white")
 
     for col_idx, (res, costs, col, col_lbl) in enumerate(col_configs):
@@ -782,7 +782,9 @@ def make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b) -> plt.Figure:
         (res_b, cfg_b, OPTION_COLOURS[1], "B"),
     ]
 
-    fig, axes = plt.subplots(4, 2, figsize=(12, 16), sharey=False)
+    global_soc_ylim = max(cfg_a["bat"], cfg_b["bat"], 0.1) * BAT_DOD * 1.15
+
+    fig, axes = plt.subplots(4, 2, figsize=(12, 16), sharey=True)
     fig.patch.set_facecolor("white")
 
     for col_idx, (res, cfg, col, tag) in enumerate(options):
@@ -807,7 +809,7 @@ def make_soc_seasonal_fig(res_a, res_b, cfg_a, cfg_b) -> plt.Figure:
             if bat_usable > 0:
                 ax.axhline(bat_usable, color="gray", lw=0.9, ls="--",
                            label=f"Max usable ({bat_usable:.1f} kWh)")
-                ax.set_ylim(0, bat_usable * 1.15)
+                ax.set_ylim(0, global_soc_ylim)
                 avg_val = float(avg_soc.mean())
                 avg_pct = avg_val / bat_usable * 100
                 ax.text(0.98, 0.97, f"Avg SoC: {avg_val:.1f} kWh ({avg_pct:.0f}%)",
