@@ -1298,25 +1298,39 @@ with st.sidebar:
         colour = "#e8463a" if tag == "A" else "#0f9d58"
         st.markdown(f"**Option {tag}**")
         if solar_quotes is not None and len(solar_quotes) > 0:
+            CUSTOM_IDX = len(solar_quotes)
+
             def _fmt(i):
+                if i == CUSTOM_IDX:
+                    return "— Custom —"
                 r = solar_quotes.iloc[i]
                 price_tag = "net, rebates incl." if r.get("Rebates_Included", False) else "gross"
                 return (f"{r['Vendor']}  —  {r['Solar_kW']:.2g} kW solar / "
                         f"{r['Battery_kWh']:.4g} kWh battery  "
                         f"(${int(r['Cost_AUD']):,} {price_tag})")
+
             sel_idx = st.selectbox(
-                "Quote", range(len(solar_quotes)),
+                "Quote", range(CUSTOM_IDX + 1),
                 format_func=_fmt,
-                index=min(default_idx, len(solar_quotes) - 1),
+                index=min(default_idx, CUSTOM_IDX - 1),
                 key=f"quote_{tag}",
             )
-            row          = solar_quotes.iloc[sel_idx]
-            solar        = float(row["Solar_kW"])
-            bat          = float(row["Battery_kWh"])
-            inv          = float(row["Inverter_kW"])
-            cost         = int(row["Cost_AUD"])
-            rebates_inc  = bool(row.get("Rebates_Included", False))
-            label        = _fmt(sel_idx)
+
+            if sel_idx == CUSTOM_IDX:
+                label       = st.text_input("Label", value=f"Custom {tag}", key=f"lbl_{tag}")
+                solar       = st.number_input("Solar (kW)",    0.0, 30.0,    6.6,    0.5, key=f"sol_{tag}")
+                bat         = st.number_input("Battery (kWh)", 0.0, 60.0,   13.5,    0.5, key=f"bat_{tag}")
+                inv         = st.number_input("Inverter (kW)", 0.0, 15.0,    5.0,    0.5, key=f"inv_{tag}")
+                cost        = st.number_input("Gross cost ($)",  0, 100_000, 15_000, 500, key=f"cost_{tag}")
+                rebates_inc = False
+            else:
+                row          = solar_quotes.iloc[sel_idx]
+                solar        = float(row["Solar_kW"])
+                bat          = float(row["Battery_kWh"])
+                inv          = float(row["Inverter_kW"])
+                cost         = int(row["Cost_AUD"])
+                rebates_inc  = bool(row.get("Rebates_Included", False))
+                label        = _fmt(sel_idx)
         else:
             # Fallback to manual entry if no quotes file
             label = st.text_input("Label", key=f"lbl_{tag}",
