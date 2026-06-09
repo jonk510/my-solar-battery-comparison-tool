@@ -567,6 +567,163 @@ def make_npv_sensitivity_fig(pb_a: dict, pb_b: dict, cfg_a: dict, cfg_b: dict) -
     return fig
 
 
+def make_efficiency_scatter_fig(pbs: list, pb_a: dict, pb_b: dict, discount_rate: float):
+    """NPV vs net capex investment efficiency scatter.
+
+    All quotes × tariffs shown as small markers; selected options A and B
+    are highlighted with stars.  Horizontal dashed line at NPV = $0.
+    """
+    active = [pb for pb in pbs if pb.get("net", 0) > 0]
+    if not active and pb_a.get("net", 0) <= 0 and pb_b.get("net", 0) <= 0:
+        return None
+
+    tariff_col = {"A1 Flat": "#1a73e8", "Midday Saver": "#0f9d58"}
+    tariff_mrk = {"A1 Flat": "o",       "Midday Saver": "s"}
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    fig.patch.set_facecolor("white")
+    seen_tariffs: set = set()
+
+    for pb in active:
+        col = tariff_col.get(pb["tariff"], "#888")
+        mrk = tariff_mrk.get(pb["tariff"], "o")
+        leg = pb["tariff"] if pb["tariff"] not in seen_tariffs else "_"
+        seen_tariffs.add(pb["tariff"])
+        ax.scatter(pb["net"], pb["npv"], color=col, marker=mrk,
+                   s=65, zorder=4, label=leg, alpha=0.8)
+        short = str(pb["label"])[:22]
+        ax.annotate(short, (pb["net"], pb["npv"]),
+                    textcoords="offset points", xytext=(6, 3),
+                    fontsize=7, color="#444444")
+
+    # Highlight selected options A and B
+    for pb, tag, col in [(pb_a, "A", "#e8463a"), (pb_b, "B", "#0f9d58")]:
+        if pb.get("net", 0) > 0:
+            ax.scatter(pb["net"], pb["npv"], color=col, marker="*",
+                       s=220, zorder=7, edgecolors="white", linewidths=0.6,
+                       label=f"Option {tag} (selected)")
+            ax.annotate(f"  ★ {tag}: {str(pb['label'])[:22]}",
+                        (pb["net"], pb["npv"]),
+                        textcoords="offset points", xytext=(7, 4),
+                        fontsize=7.5, fontweight="bold", color=col)
+
+    ax.axhline(0, color="black", lw=1.3, ls="--",
+               label=f"Hurdle: NPV = $0  ({discount_rate*100:.1f}%/yr)", zorder=3)
+
+    ylo, yhi = ax.get_ylim()
+    xlo, xhi = ax.get_xlim()
+    ax.fill_between([xlo, xhi], ylo, 0, color="#e74c3c", alpha=0.04)
+    ax.fill_between([xlo, xhi], 0, max(yhi, 1), color="#2ecc71", alpha=0.04)
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(ylo, max(yhi, 1))
+
+    ax.set_xlabel("Net System Cost after Rebates (AUD)", fontsize=10)
+    ax.set_ylabel(f"NPV — {ANALYSIS_YEARS}-yr @ {discount_rate*100:.1f}%/yr (AUD)", fontsize=10)
+    ax.set_title(
+        "Investment Efficiency — NPV vs Net Capex\n"
+        "★ = selected options  ·  Above dashed line: positive NPV (beats hurdle rate)  ·"
+        "  Vertical gap below line = value shortfall",
+        fontsize=9,
+    )
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.legend(fontsize=8, loc="best")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def make_tornado_fig(pb_base: dict, raw_df_hash: int, cfg: dict,
+                     shading: tuple, stc_price: float, rebates_inc: bool,
+                     grid_charge: bool, gc_start: float, gc_end: float,
+                     tariff_esc: float, discount_rate: float, _raw_df) -> plt.Figure:
+    """Tornado sensitivity diagram — NPV swing for ±range on each key input."""
+    base_npv = pb_base["npv"]
+    solar, bat, inv, cost = cfg["solar"], cfg["bat"], cfg["inv"], cfg["cost"]
+    tariff = cfg["tariff"]
+    shade_s, shade_au, shade_w = shading
+
+    def _npv(ts=tariff_esc, dr=discount_rate, c=cost,
+             ss=shade_s, sau=shade_au, sw=shade_w):
+        return cached_payback(
+            raw_df_hash, solar, bat, inv, c, tariff, "_tornado_",
+            ss, sau, sw, stc_price, rebates_inc,
+            grid_charge, gc_start, gc_end, ts, dr, _raw_df,
+        )["npv"]
+
+    rows = [
+        ("Tariff escalation",
+         f"{max(0, tariff_esc - 0.02)*100:.1f}%/yr",
+         f"{(tariff_esc + 0.03)*100:.1f}%/yr",
+         _npv(ts=max(0, tariff_esc - 0.02)),
+         _npv(ts=tariff_esc + 0.03)),
+
+        ("Discount rate",
+         f"{max(0, discount_rate - 0.04)*100:.1f}%/yr",
+         f"{(discount_rate + 0.04)*100:.1f}%/yr",
+         _npv(dr=max(0, discount_rate - 0.04)),
+         _npv(dr=discount_rate + 0.04)),
+
+        ("System cost",
+         "−15%", "+15%",
+         _npv(c=cost * 0.85),
+         _npv(c=cost * 1.15)),
+
+        ("Summer shading",
+         f"×{max(0.10, shade_s * 0.75):.2f}",
+         f"×{min(1.0,  shade_s * 1.25):.2f}",
+         _npv(ss=max(0.10, shade_s * 0.75)),
+         _npv(ss=min(1.0,  shade_s * 1.25))),
+
+        ("Winter shading",
+         f"×{max(0.05, shade_w * 0.70):.2f}",
+         f"×{min(1.0,  shade_w * 1.30):.2f}",
+         _npv(sw=max(0.05, shade_w * 0.70)),
+         _npv(sw=min(1.0,  shade_w * 1.30))),
+    ]
+
+    rows.sort(key=lambda r: abs(r[3] - r[4]), reverse=True)
+
+    all_vals = [r[3] for r in rows] + [r[4] for r in rows] + [base_npv, 0]
+    x_range = max(all_vals) - min(all_vals) if max(all_vals) != min(all_vals) else 1
+    margin = x_range * 0.015
+
+    n = len(rows)
+    fig, ax = plt.subplots(figsize=(11, max(4, n * 1.0 + 1.5)))
+    fig.patch.set_facecolor("white")
+
+    for i, (name, lo_lbl, hi_lbl, npv_lo, npv_hi) in enumerate(reversed(rows)):
+        better = max(npv_lo, npv_hi)
+        worse  = min(npv_lo, npv_hi)
+        ax.barh(i, better - base_npv, left=base_npv,
+                color="#2ecc71", alpha=0.80, height=0.55, zorder=3)
+        ax.barh(i, worse  - base_npv, left=base_npv,
+                color="#e74c3c", alpha=0.80, height=0.55, zorder=3)
+        left_lbl  = lo_lbl if npv_lo <= npv_hi else hi_lbl
+        right_lbl = hi_lbl if npv_lo <= npv_hi else lo_lbl
+        ax.text(worse  - margin, i, left_lbl,  ha="right", va="center",
+                fontsize=7.5, color="#c0392b")
+        ax.text(better + margin, i, right_lbl, ha="left",  va="center",
+                fontsize=7.5, color="#27ae60")
+
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([r[0] for r in reversed(rows)], fontsize=9)
+    ax.axvline(base_npv, color="black", lw=1.5, zorder=5,
+               label=f"Base NPV: ${base_npv:,.0f}")
+    ax.axvline(0, color="gray", lw=0.9, ls=":", alpha=0.6, label="NPV = $0")
+    ax.set_xlabel(f"NPV — {ANALYSIS_YEARS}-yr (AUD)", fontsize=10)
+    ax.set_title(
+        f"Sensitivity (Tornado) — {str(cfg.get('label', ''))[:45]}  ·  {cfg['tariff']}\n"
+        "Green = upside, Red = downside.  Widest bars = most impactful variables.",
+        fontsize=10,
+    )
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.legend(fontsize=8, loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def make_monthly_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b: dict) -> plt.Figure:
     """Monthly net electricity cost — Status Quo vs Option A vs Option B."""
     m_base = _monthly_net(res_base)
@@ -1316,9 +1473,8 @@ with st.sidebar:
 
     def option_selector(tag: str, default_idx: int):
         colour = "#e8463a" if tag == "A" else "#0f9d58"
-        _def_s, _def_au, _def_w = 0.60, 0.50, 0.40   # default shading factors
-        st.markdown(f"**Option {tag}**")
         _def_s, _def_au, _def_w = 0.60, 0.50, 0.40
+        st.markdown(f"**Option {tag}**")
         if solar_quotes is not None and len(solar_quotes) > 0:
             CUSTOM_IDX = len(solar_quotes)
 
@@ -1448,6 +1604,21 @@ with st.sidebar:
     discount_rate = discount_pct / 100.0
 
     run = st.button("Run analysis", type="primary", disabled=(raw_df is None))
+
+    # Warn when settings have changed since the last run
+    _run_key = (
+        getattr(uploaded, "name", ""), getattr(uploaded, "size", 0),
+        cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["cost"],
+        cfg_a["tariff"], cfg_a["shade"],
+        cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["cost"],
+        cfg_b["tariff"], cfg_b["shade"],
+        stc_price, grid_charge, gc_start, gc_end, tariff_esc, discount_rate,
+    )
+    if run:
+        st.session_state["_run_key"] = _run_key
+    if (not run and "_run_key" in st.session_state
+            and st.session_state["_run_key"] != _run_key):
+        st.warning("⚠️ Settings changed — click **Run analysis** to update.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1761,6 +1932,65 @@ for pb, cfg, tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
         "Electricity price inflation": f"{tariff_esc*100:.1f}%/yr",
     })
 st.dataframe(pd.DataFrame(pb_rows).set_index("Option"), use_container_width=True)
+
+# ── Investment Efficiency Scatter ─────────────────────────────────────────────
+st.divider()
+st.subheader("Investment Efficiency")
+st.caption(
+    "NPV vs net system cost for all quotes in your quotes file, on both tariffs. "
+    "★ = currently selected options A and B. "
+    f"Above the dashed line: investment beats the {discount_rate*100:.1f}%/yr hurdle rate. "
+    "Option A shading is used for all quotes to enable like-for-like comparison."
+)
+
+_eff_pbs: list = []
+if solar_quotes is not None and len(solar_quotes) > 0:
+    with st.spinner("Computing investment efficiency…"):
+        for _, _row in solar_quotes.iterrows():
+            for _tariff in ["A1 Flat", "Midday Saver"]:
+                try:
+                    _eff_pbs.append(cached_payback(
+                        raw_hash,
+                        float(_row["Solar_kW"]), float(_row["Battery_kWh"]),
+                        float(_row["Inverter_kW"]), int(_row["Cost_AUD"]),
+                        _tariff, str(_row["Vendor"]),
+                        *cfg_a["shade"],
+                        stc_price, bool(_row.get("Rebates_Included", False)),
+                        grid_charge, gc_start, gc_end, tariff_esc, discount_rate,
+                        raw_df,
+                    ))
+                except Exception:
+                    pass
+
+fig_eff = make_efficiency_scatter_fig(_eff_pbs, pb_a, pb_b, discount_rate)
+if fig_eff:
+    st.pyplot(fig_eff, use_container_width=True)
+    plt.close(fig_eff)
+else:
+    st.info("No valid quotes to display. Check that your quotes file has cost data.")
+
+# ── Sensitivity Analysis (Tornado) ────────────────────────────────────────────
+st.divider()
+st.subheader("Sensitivity Analysis")
+st.caption(
+    "NPV impact when each input is varied independently from its base case value. "
+    "Green = upside, Red = downside. Widest bars = most impactful variables. "
+    "Inputs varied: tariff escalation (−2 / +3 %/yr), discount rate (±4%), "
+    "system cost (±15%), summer shading (±25%), winter shading (±30%)."
+)
+with st.spinner("Computing sensitivity analysis (first run only — results cached after)…"):
+    for _pb, _cfg, _tag in [(pb_a, cfg_a, "A"), (pb_b, cfg_b, "B")]:
+        st.markdown(
+            f"**Option {_tag}: {str(_cfg.get('label',''))[:50]}  ·  {_cfg['tariff']}**"
+        )
+        fig_tornado = make_tornado_fig(
+            _pb, raw_hash, _cfg, _cfg["shade"],
+            stc_price, bool(_cfg.get("rebates_inc", False)),
+            grid_charge, gc_start, gc_end,
+            tariff_esc, discount_rate, raw_df,
+        )
+        st.pyplot(fig_tornado, use_container_width=True)
+        plt.close(fig_tornado)
 
 # ── Monthly cost ──────────────────────────────────────────────────────────────
 st.divider()
