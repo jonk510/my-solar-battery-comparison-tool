@@ -196,13 +196,16 @@ def cached_build_pdf(
     raw_df_hash,
     solar_a, bat_a, inv_a, tariff_a,
     solar_b, bat_b, inv_b, tariff_b,
-    shade_s, shade_au, shade_w,
+    shade_s_a, shade_au_a, shade_w_a,
+    shade_s_b, shade_au_b, shade_w_b,
     tariff_esc, discount_rate,
     _raw_df, _res_a, _res_b, _res_base, _pb_a, _pb_b, _cfg_a, _cfg_b,
 ):
     return _build_pdf(
         _raw_df, _res_a, _res_b, _res_base, _pb_a, _pb_b,
-        _cfg_a, _cfg_b, shade_s, shade_au, shade_w, tariff_esc, discount_rate,
+        _cfg_a, _cfg_b,
+        (shade_s_a, shade_au_a, shade_w_a), (shade_s_b, shade_au_b, shade_w_b),
+        tariff_esc, discount_rate,
     )
 
 
@@ -595,20 +598,19 @@ def make_monthly_fig(res_base, res_a, res_b, cfg_base: dict, cfg_a: dict, cfg_b:
 
 
 def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
-                            shade_summer: float, shade_autumn: float,
-                            shade_winter: float) -> plt.Figure:
+                            shade_a: tuple, shade_b: tuple) -> plt.Figure:
     """2×2 grid — one subplot per season, each with 3 curves:
       · Option A unshaded  (shade = 1.0)
-      · Option A shaded    (user shading factors)
-      · Option B shaded    (user shading factors)
-    x-axis = hour of day, y-axis = kWh per 30-min slot.
+      · Option A shaded    (per-option shading factors)
+      · Option B shaded    (per-option shading factors)
+    shade_a / shade_b are (shade_summer, shade_autumn, shade_winter) tuples.
     """
-    # Representative mid-season day-of-year (Southern Hemisphere)
+    # Representative mid-season day-of-year (Southern Hemisphere); third element = shade tuple index
     SEASONS = [
-        ("Summer (Dec–Feb)", 15,  shade_summer),   # ~Jan 15
-        ("Autumn (Mar–May)", 105, shade_autumn),   # ~Apr 15
-        ("Winter (Jun–Aug)", 196, shade_winter),   # ~Jul 15
-        ("Spring (Sep–Nov)", 288, shade_autumn),   # ~Oct 15
+        ("Summer (Dec–Feb)", 15,  0),   # index 0 = summer
+        ("Autumn (Mar–May)", 105, 1),   # index 1 = autumn
+        ("Winter (Jun–Aug)", 196, 2),   # index 2 = winter
+        ("Spring (Sep–Nov)", 288, 1),   # spring uses autumn factor
     ]
 
     def _day_profile(solar_kw: float, doy: int, shade: float) -> np.ndarray:
@@ -625,20 +627,22 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
     fig.patch.set_facecolor("white")
     hours = (np.arange(48) + 0.5) / 2.0
 
-    for ax, (season, doy, shade) in zip(axes.flat, SEASONS):
+    for ax, (season, doy, shade_idx) in zip(axes.flat, SEASONS):
         kw_a = cfg_a["solar"]
         kw_b = cfg_b["solar"]
+        sv_a = shade_a[shade_idx]
+        sv_b = shade_b[shade_idx]
 
         unshaded_a = _day_profile(kw_a, doy, 1.0)
-        shaded_a   = _day_profile(kw_a, doy, shade)
-        shaded_b   = _day_profile(kw_b, doy, shade)
+        shaded_a   = _day_profile(kw_a, doy, sv_a)
+        shaded_b   = _day_profile(kw_b, doy, sv_b)
 
         ax.plot(hours, unshaded_a, color=OPTION_COLOURS[0], ls="--", lw=1.4, alpha=0.6,
                 label=f"A unshaded ({kw_a} kW)")
         ax.plot(hours, shaded_a,   color=OPTION_COLOURS[0], ls="-",  lw=2.0,
-                label=f"A shaded  ({kw_a} kW, ×{shade:.2f})")
+                label=f"A shaded  ({kw_a} kW, ×{sv_a:.2f})")
         ax.plot(hours, shaded_b,   color=OPTION_COLOURS[1], ls="-",  lw=2.0,
-                label=f"B shaded  ({kw_b} kW, ×{shade:.2f})")
+                label=f"B shaded  ({kw_b} kW, ×{sv_b:.2f})")
 
         ax.fill_between(hours, shaded_a, unshaded_a,
                         color=OPTION_COLOURS[0], alpha=0.08, label="_")
@@ -655,8 +659,7 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
         ax.grid(axis="y", alpha=0.25)
 
         # Shading loss annotation
-        peak_loss_pct = (1 - shade) * 100
-        ax.text(0.98, 0.97, f"Shading loss: {peak_loss_pct:.0f}%",
+        ax.text(0.98, 0.97, f"A loss: {(1-sv_a)*100:.0f}%  B loss: {(1-sv_b)*100:.0f}%",
                 transform=ax.transAxes, ha="right", va="top", fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#aaaaaa",
                           alpha=0.85, lw=0.8))
@@ -915,7 +918,7 @@ def _make_summary_table_fig(pb_a, pb_b, cfg_a, cfg_b, tariff_esc, discount_rate)
 
 
 def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
-               cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter,
+               cfg_a, cfg_b, shade_a: tuple, shade_b: tuple,
                tariff_esc, discount_rate) -> bytes:
     """Compile all charts + explanatory text into a multi-page PDF."""
     import io as _io
@@ -1058,7 +1061,7 @@ def _build_pdf(raw_df, res_a, res_b, res_base, pb_a, pb_b,
             "annual yield — even partial shading can cut output disproportionately. The shaded area "
             "between the two Option A lines shows how much generation is being lost.",
         ])
-        _save_chart(pdf, make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter),
+        _save_chart(pdf, make_solar_profile_fig(cfg_a, cfg_b, shade_a, shade_b),
                     "Dashed line = theoretical maximum (no shading). Solid line = estimated actual output "
                     "with your seasonal shading factors applied. Shaded area shows generation lost to "
                     "obstructions. Winter output is lower due to Perth's shorter days at 32° S latitude.")
@@ -1243,6 +1246,13 @@ with st.sidebar:
                             return orig
                 raise ValueError(f"No column matching {keywords} in {list(quotes_df.columns)}")
 
+            def _fc_opt(keywords):
+                for kw in keywords:
+                    for lc, orig in cols.items():
+                        if kw in lc:
+                            return orig
+                return None
+
             col_vendor   = _fc(["vendor", "name", "label"])
             col_solar    = _fc(["solar"])
             col_battery  = _fc(["battery", "bat"])
@@ -1258,6 +1268,10 @@ with st.sidebar:
             except ValueError:
                 col_rebates_inc = None
 
+            col_shade_s  = _fc_opt(["shade_summer"])
+            col_shade_au = _fc_opt(["shade_autumn"])
+            col_shade_w  = _fc_opt(["shade_winter"])
+
             if col_order:
                 quotes_df = quotes_df.sort_values(col_order)
 
@@ -1269,6 +1283,10 @@ with st.sidebar:
                 col_inverter: "Inverter_kW",
                 col_cost:     "Cost_AUD",
             }).reset_index(drop=True)
+
+            quotes_df["Shade_Summer"] = pd.to_numeric(quotes_df[col_shade_s],  errors="coerce").fillna(0.60) if col_shade_s  else 0.60
+            quotes_df["Shade_Autumn"] = pd.to_numeric(quotes_df[col_shade_au], errors="coerce").fillna(0.50) if col_shade_au else 0.50
+            quotes_df["Shade_Winter"] = pd.to_numeric(quotes_df[col_shade_w],  errors="coerce").fillna(0.40) if col_shade_w  else 0.40
 
             # Parse the rebates-included flag (Yes/No → bool), default False
             if col_rebates_inc:
@@ -1298,7 +1316,9 @@ with st.sidebar:
 
     def option_selector(tag: str, default_idx: int):
         colour = "#e8463a" if tag == "A" else "#0f9d58"
+        _def_s, _def_au, _def_w = 0.60, 0.50, 0.40   # default shading factors
         st.markdown(f"**Option {tag}**")
+        _def_s, _def_au, _def_w = 0.60, 0.50, 0.40
         if solar_quotes is not None and len(solar_quotes) > 0:
             CUSTOM_IDX = len(solar_quotes)
 
@@ -1333,6 +1353,9 @@ with st.sidebar:
                 cost         = int(row["Cost_AUD"])
                 rebates_inc  = bool(row.get("Rebates_Included", False))
                 label        = _fmt(sel_idx)
+                _def_s  = float(row.get("Shade_Summer", 0.60))
+                _def_au = float(row.get("Shade_Autumn", 0.50))
+                _def_w  = float(row.get("Shade_Winter", 0.40))
         else:
             # Fallback to manual entry if no quotes file
             label = st.text_input("Label", key=f"lbl_{tag}",
@@ -1344,25 +1367,21 @@ with st.sidebar:
             rebates_inc = False
 
         tariff = st.selectbox("Tariff", TARIFFS, key=f"tariff_{tag}")
+        with st.expander("Shading factors", expanded=False):
+            st.caption("Fraction of unshaded generation reaching the panels (1.0 = fully unshaded).")
+            shade_s_q  = st.slider("Summer (Dec–Feb)",  0.0, 1.0, _def_s,  0.05, key=f"shade_s_{tag}")
+            shade_au_q = st.slider("Autumn/Spring",     0.0, 1.0, _def_au, 0.05, key=f"shade_au_{tag}")
+            shade_w_q  = st.slider("Winter (Jun–Aug)",  0.0, 1.0, _def_w,  0.05, key=f"shade_w_{tag}")
         st.markdown("")
         return dict(label=label, solar=solar, bat=bat, inv=inv, cost=cost,
-                    tariff=tariff, rebates_inc=rebates_inc)
+                    tariff=tariff, rebates_inc=rebates_inc,
+                    shade=(shade_s_q, shade_au_q, shade_w_q))
 
     cfg_a = option_selector("A", default_idx=0)
     cfg_b = option_selector("B", default_idx=1)
 
     st.divider()
-    st.subheader("3. Site shading")
-    st.caption(
-        "Fraction of unshaded generation actually reaching the panels. "
-        "1.0 = fully unshaded. Typical Perth suburban: 0.85–0.95 summer, 0.65–0.80 winter."
-    )
-    shade_summer  = st.slider("Summer shading (Dec–Feb)",  0.0, 1.0, 0.60, 0.05)
-    shade_autumn  = st.slider("Autumn/Spring shading",     0.0, 1.0, 0.30, 0.05)
-    shade_winter  = st.slider("Winter shading (Jun–Aug)",  0.0, 1.0, 0.10, 0.05)
-
-    st.divider()
-    st.subheader("4. STC price")
+    st.subheader("3. STC price")
     _live_stc, _stc_source = fetch_stc_price()
     st.caption(
         f"Small-scale Technology Certificate spot price (inc GST). "
@@ -1372,7 +1391,7 @@ with st.sidebar:
     stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, _live_stc, 0.50)
 
     st.divider()
-    st.subheader("5. Battery grid charging")
+    st.subheader("4. Battery grid charging")
     st.caption(
         "Applies to Midday Saver tariff only. "
         "When enabled, the battery tops up from the grid during the chosen window."
@@ -1396,7 +1415,7 @@ with st.sidebar:
         gc_start, gc_end = 9.0, 15.0
 
     st.divider()
-    st.subheader("6. Future cost assumptions")
+    st.subheader("5. Future cost assumptions")
     apply_inflation = st.toggle(
         "Apply electricity price inflation",
         value=True,
@@ -1457,29 +1476,27 @@ if not run:
 # ── Run simulations ──────────────────────────────────────────────────────────
 raw_hash = hash(uploaded.getvalue())
 
-shading = (shade_summer, shade_autumn, shade_winter)
-
 with st.spinner("Simulating Option A…"):
     res_a = cached_simulate(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
-        *shading, grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        *cfg_a["shade"], grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
 with st.spinner("Simulating Option B…"):
     res_b = cached_simulate(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
-        *shading, grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        *cfg_b["shade"], grid_charge, gc_start, gc_end, tariff_esc, raw_df,
     )
 with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
-        *shading, stc_price, cfg_a["rebates_inc"],
+        *cfg_a["shade"], stc_price, cfg_a["rebates_inc"],
         grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
-        *shading, stc_price, cfg_b["rebates_inc"],
+        *cfg_b["shade"], stc_price, cfg_b["rebates_inc"],
         grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
     )
 
@@ -1487,8 +1504,8 @@ with st.spinner("Computing status quo…"):
     res_base = cached_simulate_no_solar(raw_hash, cfg_a["tariff"], raw_df)
 cfg_base = {"label": "Status Quo", "tariff": cfg_a["tariff"]}
 
-bl_a = baseline(add_solar_shaded(raw_df, cfg_a["solar"], *shading), cfg_a["tariff"])
-bl_b = baseline(add_solar_shaded(raw_df, cfg_b["solar"], *shading), cfg_b["tariff"])
+bl_a = baseline(add_solar_shaded(raw_df, cfg_a["solar"], *cfg_a["shade"]), cfg_a["tariff"])
+bl_b = baseline(add_solar_shaded(raw_df, cfg_b["solar"], *cfg_b["shade"]), cfg_b["tariff"])
 
 # ── Metric cards ─────────────────────────────────────────────────────────────
 st.subheader("Key Metrics")
@@ -1599,7 +1616,7 @@ st.caption(
     "Solid = with your shading factors applied. "
     "Shaded area shows the generation lost to shading."
 )
-fig_profiles = make_solar_profile_fig(cfg_a, cfg_b, shade_summer, shade_autumn, shade_winter)
+fig_profiles = make_solar_profile_fig(cfg_a, cfg_b, cfg_a["shade"], cfg_b["shade"])
 st.pyplot(fig_profiles, use_container_width=True)
 plt.close(fig_profiles)
 
@@ -1773,7 +1790,7 @@ with st.spinner("Preparing PDF report…"):
             raw_hash,
             cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
             cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
-            shade_summer, shade_autumn, shade_winter,
+            *cfg_a["shade"], *cfg_b["shade"],
             tariff_esc, discount_rate,
             raw_df, res_a, res_b, res_base, pb_a, pb_b, cfg_a, cfg_b,
         )
