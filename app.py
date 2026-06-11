@@ -1528,10 +1528,32 @@ with st.sidebar:
             shade_s_q  = st.slider("Summer (Dec–Feb)",  0.0, 1.0, _def_s,  0.05, key=f"shade_s_{tag}")
             shade_au_q = st.slider("Autumn/Spring",     0.0, 1.0, _def_au, 0.05, key=f"shade_au_{tag}")
             shade_w_q  = st.slider("Winter (Jun–Aug)",  0.0, 1.0, _def_w,  0.05, key=f"shade_w_{tag}")
+        with st.expander("Battery grid charging", expanded=False):
+            st.caption("Midday Saver tariff only. When enabled, the battery tops up from the grid during the chosen window.")
+            gc_enabled = st.toggle(
+                "Charge battery from grid",
+                value=True,
+                key=f"gc_enabled_{tag}",
+            )
+            if gc_enabled:
+                _gc_hours = [h / 2 for h in range(0, 49)]
+                def _fmt_h(h):
+                    return f"{int(h):02d}:{int(round(h % 1 * 60)):02d}"
+                gc_window = st.select_slider(
+                    "Grid charge window",
+                    options=_gc_hours,
+                    value=(9.0, 15.0),
+                    format_func=_fmt_h,
+                    key=f"gc_window_{tag}",
+                )
+                gc_start_q, gc_end_q = float(gc_window[0]), float(gc_window[1])
+            else:
+                gc_start_q, gc_end_q = 9.0, 15.0
         st.markdown("")
         return dict(label=label, solar=solar, bat=bat, inv=inv, cost=cost,
                     tariff=tariff, rebates_inc=rebates_inc,
-                    shade=(shade_s_q, shade_au_q, shade_w_q))
+                    shade=(shade_s_q, shade_au_q, shade_w_q),
+                    grid_charge=gc_enabled, gc_start=gc_start_q, gc_end=gc_end_q)
 
     cfg_a = option_selector("A", default_idx=0)
     cfg_b = option_selector("B", default_idx=1)
@@ -1547,31 +1569,7 @@ with st.sidebar:
     stc_price = st.slider("STC spot price ($/STC)", 20.0, 45.0, _live_stc, 0.50)
 
     st.divider()
-    st.subheader("4. Battery grid charging")
-    st.caption(
-        "Applies to Midday Saver tariff only. "
-        "When enabled, the battery tops up from the grid during the chosen window."
-    )
-    grid_charge = st.toggle(
-        "Charge battery from grid (in addition to solar)",
-        value=True,
-    )
-    if grid_charge:
-        _gc_hours = [h / 2 for h in range(0, 49)]
-        def _fmt_h(h):
-            return f"{int(h):02d}:{int(round(h % 1 * 60)):02d}"
-        gc_window = st.select_slider(
-            "Grid charge window",
-            options=_gc_hours,
-            value=(9.0, 15.0),
-            format_func=_fmt_h,
-        )
-        gc_start, gc_end = float(gc_window[0]), float(gc_window[1])
-    else:
-        gc_start, gc_end = 9.0, 15.0
-
-    st.divider()
-    st.subheader("5. Future cost assumptions")
+    st.subheader("4. Future cost assumptions")
     apply_inflation = st.toggle(
         "Apply electricity price inflation",
         value=True,
@@ -1612,7 +1610,10 @@ with st.sidebar:
         cfg_a["tariff"], cfg_a["shade"],
         cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["cost"],
         cfg_b["tariff"], cfg_b["shade"],
-        stc_price, grid_charge, gc_start, gc_end, tariff_esc, discount_rate,
+        stc_price,
+        cfg_a["grid_charge"], cfg_a["gc_start"], cfg_a["gc_end"],
+        cfg_b["grid_charge"], cfg_b["gc_start"], cfg_b["gc_end"],
+        tariff_esc, discount_rate,
     )
     if run:
         st.session_state["_run_key"] = _run_key
@@ -1650,25 +1651,29 @@ raw_hash = hash(uploaded.getvalue())
 with st.spinner("Simulating Option A…"):
     res_a = cached_simulate(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"], cfg_a["tariff"],
-        *cfg_a["shade"], grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        *cfg_a["shade"], cfg_a["grid_charge"], cfg_a["gc_start"], cfg_a["gc_end"],
+        tariff_esc, raw_df,
     )
 with st.spinner("Simulating Option B…"):
     res_b = cached_simulate(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"], cfg_b["tariff"],
-        *cfg_b["shade"], grid_charge, gc_start, gc_end, tariff_esc, raw_df,
+        *cfg_b["shade"], cfg_b["grid_charge"], cfg_b["gc_start"], cfg_b["gc_end"],
+        tariff_esc, raw_df,
     )
 with st.spinner("Computing payback…"):
     pb_a = cached_payback(
         raw_hash, cfg_a["solar"], cfg_a["bat"], cfg_a["inv"],
         cfg_a["cost"], cfg_a["tariff"], cfg_a["label"],
         *cfg_a["shade"], stc_price, cfg_a["rebates_inc"],
-        grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
+        cfg_a["grid_charge"], cfg_a["gc_start"], cfg_a["gc_end"],
+        tariff_esc, discount_rate, raw_df,
     )
     pb_b = cached_payback(
         raw_hash, cfg_b["solar"], cfg_b["bat"], cfg_b["inv"],
         cfg_b["cost"], cfg_b["tariff"], cfg_b["label"],
         *cfg_b["shade"], stc_price, cfg_b["rebates_inc"],
-        grid_charge, gc_start, gc_end, tariff_esc, discount_rate, raw_df,
+        cfg_b["grid_charge"], cfg_b["gc_start"], cfg_b["gc_end"],
+        tariff_esc, discount_rate, raw_df,
     )
 
 with st.spinner("Computing status quo…"):
@@ -1956,7 +1961,8 @@ if solar_quotes is not None and len(solar_quotes) > 0:
                         _tariff, str(_row["Vendor"]),
                         *cfg_a["shade"],
                         stc_price, bool(_row.get("Rebates_Included", False)),
-                        grid_charge, gc_start, gc_end, tariff_esc, discount_rate,
+                        cfg_a["grid_charge"], cfg_a["gc_start"], cfg_a["gc_end"],
+                        tariff_esc, discount_rate,
                         raw_df,
                     ))
                 except Exception:
@@ -1986,7 +1992,7 @@ with st.spinner("Computing sensitivity analysis (first run only — results cach
         fig_tornado = make_tornado_fig(
             _pb, raw_hash, _cfg, _cfg["shade"],
             stc_price, bool(_cfg.get("rebates_inc", False)),
-            grid_charge, gc_start, gc_end,
+            _cfg["grid_charge"], _cfg["gc_start"], _cfg["gc_end"],
             tariff_esc, discount_rate, raw_df,
         )
         st.pyplot(fig_tornado, use_container_width=True)
