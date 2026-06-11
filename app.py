@@ -1442,8 +1442,8 @@ with st.sidebar:
             }).reset_index(drop=True)
 
             quotes_df["Shade_Summer"] = pd.to_numeric(quotes_df[col_shade_s],  errors="coerce").fillna(0.60) if col_shade_s  else 0.60
-            quotes_df["Shade_Autumn"] = pd.to_numeric(quotes_df[col_shade_au], errors="coerce").fillna(0.50) if col_shade_au else 0.50
-            quotes_df["Shade_Winter"] = pd.to_numeric(quotes_df[col_shade_w],  errors="coerce").fillna(0.40) if col_shade_w  else 0.40
+            quotes_df["Shade_Autumn"] = pd.to_numeric(quotes_df[col_shade_au], errors="coerce").fillna(0.30) if col_shade_au else 0.30
+            quotes_df["Shade_Winter"] = pd.to_numeric(quotes_df[col_shade_w],  errors="coerce").fillna(0.15) if col_shade_w  else 0.15
 
             # Parse the rebates-included flag (Yes/No → bool), default False
             if col_rebates_inc:
@@ -1473,7 +1473,7 @@ with st.sidebar:
 
     def option_selector(tag: str, default_idx: int):
         colour = "#e8463a" if tag == "A" else "#0f9d58"
-        _def_s, _def_au, _def_w = 0.60, 0.50, 0.40
+        _def_s, _def_au, _def_w = 0.60, 0.30, 0.15
         st.markdown(f"**Option {tag}**")
         if solar_quotes is not None and len(solar_quotes) > 0:
             CUSTOM_IDX = len(solar_quotes)
@@ -1510,8 +1510,8 @@ with st.sidebar:
                 rebates_inc  = bool(row.get("Rebates_Included", False))
                 label        = _fmt(sel_idx)
                 _def_s  = float(row.get("Shade_Summer", 0.60))
-                _def_au = float(row.get("Shade_Autumn", 0.50))
-                _def_w  = float(row.get("Shade_Winter", 0.40))
+                _def_au = float(row.get("Shade_Autumn", 0.30))
+                _def_w  = float(row.get("Shade_Winter", 0.15))
         else:
             # Fallback to manual entry if no quotes file
             label = st.text_input("Label", key=f"lbl_{tag}",
