@@ -43,10 +43,11 @@ _QUOTES_FILE = Path(__file__).parent / "solar_battery_quotes.xlsx"
 
 
 def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
-    """Read quotes from an xlsx file and return a list of 5-tuples
-    (label, solar_kW, battery_kWh, inverter_kW, cost_AUD).
-    Column names are matched flexibly by keyword so the spreadsheet headers
-    can be anything descriptive (e.g. 'solar array size [kW]' or 'Solar_kW').
+    """Read quotes from an xlsx file and return a list of 9-tuples
+    (label, solar_kW, battery_kWh, inverter_kW, cost_AUD,
+     shade_summer, shade_autumn, shade_winter, shade_spring).
+    Column names are matched flexibly by keyword.
+    Shading columns are optional — missing values default to the global SHADE_* constants.
     Returns an empty list and prints a warning if the file is not found.
     """
     if not path.exists():
@@ -68,6 +69,13 @@ def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
                 f"Available columns: {list(df.columns)}"
             )
 
+        def _find_opt(keywords):
+            for kw in keywords:
+                for lc, orig in cols.items():
+                    if kw in lc:
+                        return orig
+            return None
+
         col_vendor  = _find(["vendor", "name", "label", "quote name"])
         col_solar   = _find(["solar"])
         col_battery = _find(["battery", "bat"])
@@ -77,23 +85,39 @@ def load_quotes_from_file(path: Path = _QUOTES_FILE) -> list:
                           k in c for c in cols for k in ["quote", "number", "order"]
                       ) else None
 
+        col_shade_s  = _find_opt(["shade_summer"])
+        col_shade_au = _find_opt(["shade_autumn"])
+        col_shade_w  = _find_opt(["shade_winter"])
+        col_shade_sp = _find_opt(["shade_spring"])
+
         if col_order:
             df = df.sort_values(col_order)
+
+        # Drop rows where the required fields are missing (blank/empty rows in the sheet)
+        df = df.dropna(subset=[col_vendor, col_solar, col_battery, col_inverter, col_cost])
+        df = df[df[col_vendor].astype(str).str.strip() != ""]
+
+        def _shade(row, col, default):
+            if col and pd.notna(row.get(col)):
+                return float(row[col])
+            return default
 
         return [
             (str(row[col_vendor]),
              float(row[col_solar]),
              float(row[col_battery]),
              float(row[col_inverter]),
-             float(row[col_cost]))
+             float(row[col_cost]),
+             _shade(row, col_shade_s,  SHADE_SUMMER),
+             _shade(row, col_shade_au, SHADE_AUTUMN),
+             _shade(row, col_shade_w,  SHADE_WINTER),
+             _shade(row, col_shade_sp, SHADE_SPRING))
             for _, row in df.iterrows()
         ]
     except Exception as exc:
         print(f"  ⚠  Could not load quotes file: {exc}")
         return []
 
-
-QUOTES = load_quotes_from_file()
 
 
 # ─── ANALYSIS HORIZON ────────────────────────────────────────────────────────
@@ -133,6 +157,9 @@ SHADE_SUMMER = 0.60  # Dec–Feb: sun high, shading mainly confined to early mor
 SHADE_AUTUMN = 0.50  # Mar–May: transitional; moderate shadow angles through the day
 SHADE_WINTER = 0.40  # Jun–Aug: sun low, some shading across more of the day
 SHADE_SPRING = 0.50  # Sep–Nov: recovering toward summer; similar to autumn
+
+# Loaded here (after SHADE_* constants) so per-quote shading defaults resolve correctly
+QUOTES = load_quotes_from_file()
 
 # ─── SOLAR CALIBRATION — Perth-specific ──────────────────────────────────────
 # Perth latitude and unshaded specific yield.  SOLAR_K is computed at startup from
@@ -331,14 +358,17 @@ def validate_quotes(quotes: list) -> list:
     seen_labels = set()
 
     for i, q in enumerate(quotes):
-        # Tuple shape
-        if not isinstance(q, (tuple, list)) or len(q) != 5:
+        # Tuple shape: 5-element (legacy) or 9-element (with per-quote shading)
+        if not isinstance(q, (tuple, list)) or len(q) not in (5, 9):
             raise ValidationError(
-                f"Quote {i+1}: expected a 5-tuple "
-                f"(label, solar_kW, battery_kWh, inverter_kW, cost_AUD). Got: {q!r}"
+                f"Quote {i+1}: expected a 5- or 9-element tuple. Got: {q!r}"
             )
 
-        label, solar_kw, bat_kwh, inv_kw, cost = q
+        if len(q) == 9:
+            label, solar_kw, bat_kwh, inv_kw, cost, shade_s, shade_au, shade_w, shade_sp = q
+        else:
+            label, solar_kw, bat_kwh, inv_kw, cost = q
+            shade_s, shade_au, shade_w, shade_sp = SHADE_SUMMER, SHADE_AUTUMN, SHADE_WINTER, SHADE_SPRING
 
         # Label
         if not isinstance(label, str) or not label.strip():
@@ -398,8 +428,15 @@ def validate_quotes(quotes: list) -> list:
                 _warn(f"Quote '{label}': ${cost:,.0f} looks high for "
                       f"{solar_kw}kW + {bat_kwh}kWh (~${implied:,.0f} expected).")
 
-        cleaned.append((label, float(solar_kw), float(bat_kwh),
-                        float(inv_kw), float(cost)))
+        # Shading factors must be in (0, 1]
+        for sname, sval in [("shade_summer", shade_s), ("shade_autumn", shade_au),
+                             ("shade_winter", shade_w),  ("shade_spring", shade_sp)]:
+            if not isinstance(sval, (int, float)) or not (0.0 < sval <= 1.0):
+                raise ValidationError(
+                    f"Quote '{label}': {sname}={sval} must be in (0, 1].")
+
+        cleaned.append((label, float(solar_kw), float(bat_kwh), float(inv_kw), float(cost),
+                        float(shade_s), float(shade_au), float(shade_w), float(shade_sp)))
     return cleaned
 
 
@@ -504,11 +541,11 @@ def shading_factor(slot, doy):
     return seasonal * (0.70 + 0.30 * sin_e)
 
 
-def solar_profile(solar_kw, doy):
+def solar_profile(solar_kw, doy, shade=None):
     """
     48-element array (kWh per half-hour) using Perth solar geometry.
-    Shape = sin(solar elevation angle) — physically correct for Perth latitude.
-    Magnitude calibrated so 1 kWp × SHADE=1.0 → PERTH_SPECIFIC_YIELD kWh/year.
+    shade: optional (shade_summer, shade_autumn, shade_winter, shade_spring) tuple.
+           Defaults to global SHADE_* constants if None.
     """
     decl  = np.radians(-23.45 * np.cos(2*np.pi*(doy+10)/365))
     slots = np.arange(48)
@@ -517,11 +554,14 @@ def solar_profile(solar_kw, doy):
     sin_e = np.sin(_lat)*np.sin(decl) + np.cos(_lat)*np.cos(decl)*np.cos(ha)
     irrad = np.maximum(0.0, sin_e)        # zero when sun is below horizon
 
+    shade_s, shade_au, shade_w, shade_sp = shade if shade else \
+        (SHADE_SUMMER, SHADE_AUTUMN, SHADE_WINTER, SHADE_SPRING)
+
     m = (pd.Timestamp("2024-01-01") + pd.Timedelta(days=int(doy)-1)).month
-    if m in (12,1,2):   sf = SHADE_SUMMER
-    elif m in (3,4,5):  sf = SHADE_AUTUMN
-    elif m in (6,7,8):  sf = SHADE_WINTER
-    else:               sf = SHADE_SPRING
+    if m in (12,1,2):   sf = shade_s
+    elif m in (3,4,5):  sf = shade_au
+    elif m in (6,7,8):  sf = shade_w
+    else:               sf = shade_sp
 
     # kWh = kW × irrad_fraction × calibration × system_efficiency × 0.5h × site_shading
     return solar_kw * irrad * SOLAR_K * SYS_EFF * 0.5 * sf
@@ -538,13 +578,15 @@ def debs_rate(slot): return DEBS_PEAK if 30<=slot<42 else DEBS_OP
 
 
 # ─── SIMULATION ───────────────────────────────────────────────────────────────
-def add_solar(raw_df, solar_kw):
-    """Return a copy of raw_df with solar_kwh column attached for a given system size."""
+def add_solar(raw_df, solar_kw, shade=None):
+    """Return a copy of raw_df with solar_kwh column attached.
+    shade: optional (shade_summer, shade_autumn, shade_winter, shade_spring) tuple.
+    """
     sol_cache = {}
     def get_solar(row):
         doy = int(row["doy"])
         if doy not in sol_cache:
-            sol_cache[doy] = solar_profile(solar_kw, doy)
+            sol_cache[doy] = solar_profile(solar_kw, doy, shade=shade)
         return sol_cache[doy][int(row["slot"])]
     df = raw_df.copy()
     df["solar_kwh"] = df.apply(get_solar, axis=1)
@@ -2002,16 +2044,14 @@ def write_excel(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir):
             ["Midday Saver annual cost ($)",     f"${base_ms:,.2f}"],
             [],
             ["SHADING MODEL"],
-            ["Annual effective output",          "~40% of unshaded"],
-            ["Summer (Dec–Feb)",                 "75%"],
-            ["Autumn (Mar–May)",                 "55%"],
-            ["Winter (Jun–Aug)",                 "30%"],
-            ["Spring (Sep–Nov)",                 "50%"],
+            ["Annual effective output (avg)",    f"~{(SHADE_SUMMER+SHADE_AUTUMN+SHADE_WINTER+SHADE_SPRING)/4*100:.0f}% of unshaded"],
+            ["Summer (Dec–Feb)",                 f"{SHADE_SUMMER*100:.0f}%"],
+            ["Autumn (Mar–May)",                 f"{SHADE_AUTUMN*100:.0f}%"],
+            ["Winter (Jun–Aug)",                 f"{SHADE_WINTER*100:.0f}%"],
+            ["Spring (Sep–Nov)",                 f"{SHADE_SPRING*100:.0f}%"],
             [],
             ["REBATES (1 May 2026)"],
-            ["Federal tier 1 (0–14 kWh)",        "$252/kWh"],
-            ["Federal tier 2 (14–28 kWh)",       "$151/kWh"],
-            ["Federal tier 3 (28–50 kWh)",       "$38/kWh"],
+            ["Federal battery rebate (Perth Zone 3)", f"${FEDERAL_BATTERY_RATE:,.0f}/kWh flat (capped 50 kWh usable)"],
             ["State (Synergy WA, VPP required)", f"${STATE_REBATE_FLAT:,.0f} flat"],
             [],
             ["ANALYSIS PARAMETERS"],
@@ -2049,6 +2089,10 @@ def write_excel(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir):
                 "Net Annual Cost ($)": round(r["net_cost"], 2),
                 "Annual Saving ($)":   round(base - r["net_cost"], 2),
                 "Self-sufficiency (%)":round(r["self_suf_pct"], 1),
+                "Shade Summer (%)":    round(r["shade"][0] * 100, 0),
+                "Shade Autumn (%)":    round(r["shade"][1] * 100, 0),
+                "Shade Winter (%)":    round(r["shade"][2] * 100, 0),
+                "Shade Spring (%)":    round(r["shade"][3] * 100, 0),
             })
         pd.DataFrame(yr1_rows).to_excel(writer, sheet_name="Year-1 Results", index=False)
         ws = writer.sheets["Year-1 Results"]
@@ -2082,6 +2126,10 @@ def write_excel(all_res, pbs, raw_df, sweep_df, opt_kw, out_dir):
                 "20-yr Total Saving ($)":  round(pb["total_save"], 0),
                 "20-yr ROI (%)":           round(pb["roi"], 1),
                 "Year-1 Saving ($)":       round(pb["yr1_save"], 0),
+                "Shade Summer (%)":        round(pb["shade"][0] * 100, 0),
+                "Shade Autumn (%)":        round(pb["shade"][1] * 100, 0),
+                "Shade Winter (%)":        round(pb["shade"][2] * 100, 0),
+                "Shade Spring (%)":        round(pb["shade"][3] * 100, 0),
             })
         pd.DataFrame(pb_rows).to_excel(writer, sheet_name="Payback Summary", index=False)
         ws = writer.sheets["Payback Summary"]
@@ -2210,8 +2258,8 @@ def write_timeseries_excel(raw_df, out_dir):
         return
     selected_quote = max(solar_quotes, key=lambda x: x[1])[0]
     ts_label = selected_quote[0]
-    _, solar_kw, bat_kwh, inv_kw, _ = selected_quote
-    df_solar = add_solar(raw_df, solar_kw)
+    _, solar_kw, bat_kwh, inv_kw, _, shade_s, shade_au, shade_w, shade_sp = selected_quote
+    df_solar = add_solar(raw_df, solar_kw, shade=(shade_s, shade_au, shade_w, shade_sp))
 
     def style_header(ws, fill_hex="1a73e8"):
         fill = PatternFill("solid", fgColor=fill_hex)
@@ -3597,15 +3645,18 @@ def main():
     all_res = []; pbs = []
 
     print(f"\n  Running {len(validated_quotes)} quotes × 2 tariffs …\n")
-    for (label,solar_kw,bat_kwh,inv_kw,cost),tariff in itertools_product(validated_quotes, tariffs):
+    for (label,solar_kw,bat_kwh,inv_kw,cost,shade_s,shade_au,shade_w,shade_sp),tariff \
+            in itertools_product(validated_quotes, tariffs):
         sys.stdout.write(f"  • {label:<40} {tariff} … "); sys.stdout.flush()
-        df = add_solar(raw_df, solar_kw)
+        shade = (shade_s, shade_au, shade_w, shade_sp)
+        df = add_solar(raw_df, solar_kw, shade=shade)
 
         r  = simulate(df, solar_kw, bat_kwh, inv_kw, tariff)
-        r["label"] = label; r["bat_kwh"] = bat_kwh
+        r["label"] = label; r["bat_kwh"] = bat_kwh; r["shade"] = shade
         all_res.append(r)
 
         pb = payback(df, solar_kw, bat_kwh, inv_kw, cost, tariff, label)
+        pb["shade"] = shade
         pbs.append(pb)
         print("✓")
 

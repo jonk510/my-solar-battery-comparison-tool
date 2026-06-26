@@ -1386,88 +1386,167 @@ with st.sidebar:
                 raw_df = None
 
     st.divider()
-    st.subheader("2. Select quotes")
+    st.subheader("2. Manage quotes")
 
-    # ── Load quotes from xlsx (flexible column matching) ─────────────────────
-    quotes_df = None
-    if _QUOTES_PATH.exists():
+    # ── Optional: upload a different quotes file ──────────────────────────────
+    _quotes_upload = st.file_uploader(
+        "Upload quotes file (.xlsx or .csv)",
+        type=["xlsx", "xls", "csv"],
+        help="Optional — uses the bundled solar_battery_quotes.xlsx if not uploaded.",
+        key="quotes_upload",
+    )
+
+    # ── Load + normalise quotes from file ────────────────────────────────────
+    def _load_quotes_df(source) -> "pd.DataFrame | None":
         try:
-            quotes_df = pd.read_excel(_QUOTES_PATH)
-            quotes_df.columns = quotes_df.columns.str.strip()
-            cols = {c.lower(): c for c in quotes_df.columns}
+            if isinstance(source, Path):
+                df = pd.read_excel(source)
+            else:
+                buf = io.BytesIO(source.getvalue())
+                suffix = os.path.splitext(source.name)[1].lower()
+                df = pd.read_excel(buf) if suffix in (".xlsx", ".xls") else pd.read_csv(buf)
+        except Exception as exc:
+            st.warning(f"Could not load quotes file: {exc}")
+            return None
 
-            def _fc(keywords):
-                for kw in keywords:
-                    for lc, orig in cols.items():
-                        if kw in lc:
-                            return orig
-                raise ValueError(f"No column matching {keywords} in {list(quotes_df.columns)}")
+        df.columns = df.columns.str.strip()
+        cols = {c.lower(): c for c in df.columns}
 
-            def _fc_opt(keywords):
-                for kw in keywords:
-                    for lc, orig in cols.items():
-                        if kw in lc:
-                            return orig
-                return None
+        def _fc(keywords):
+            for kw in keywords:
+                for lc, orig in cols.items():
+                    if kw in lc:
+                        return orig
+            raise ValueError(f"No column matching {keywords} in {list(df.columns)}")
 
+        def _fc_opt(keywords):
+            for kw in keywords:
+                for lc, orig in cols.items():
+                    if kw in lc:
+                        return orig
+            return None
+
+        try:
             col_vendor   = _fc(["vendor", "name", "label"])
             col_solar    = _fc(["solar"])
             col_battery  = _fc(["battery", "bat"])
             col_inverter = _fc(["inverter", "inv"])
             col_cost     = _fc(["price", "cost", "aud"])
-            col_order    = next(
-                (cols[lc] for lc in cols if any(k in lc for k in ["quote", "number", "order"])),
-                None,
-            )
-            # Optional: column indicating whether the quoted price already includes rebates
-            try:
-                col_rebates_inc = _fc(["rebate", "include", "already"])
-            except ValueError:
-                col_rebates_inc = None
+        except ValueError as exc:
+            st.warning(str(exc))
+            return None
 
-            col_shade_s  = _fc_opt(["shade_summer"])
-            col_shade_au = _fc_opt(["shade_autumn"])
-            col_shade_w  = _fc_opt(["shade_winter"])
-
-            if col_order:
-                quotes_df = quotes_df.sort_values(col_order)
-
-            # Normalise to consistent internal column names
-            quotes_df = quotes_df.rename(columns={
-                col_vendor:   "Vendor",
-                col_solar:    "Solar_kW",
-                col_battery:  "Battery_kWh",
-                col_inverter: "Inverter_kW",
-                col_cost:     "Cost_AUD",
-            }).reset_index(drop=True)
-
-            quotes_df["Shade_Summer"] = pd.to_numeric(quotes_df[col_shade_s],  errors="coerce").fillna(0.60) if col_shade_s  else 0.60
-            quotes_df["Shade_Autumn"] = pd.to_numeric(quotes_df[col_shade_au], errors="coerce").fillna(0.30) if col_shade_au else 0.30
-            quotes_df["Shade_Winter"] = pd.to_numeric(quotes_df[col_shade_w],  errors="coerce").fillna(0.15) if col_shade_w  else 0.15
-
-            # Parse the rebates-included flag (Yes/No → bool), default False
-            if col_rebates_inc:
-                quotes_df["Rebates_Included"] = (
-                    quotes_df[col_rebates_inc]
-                    .astype(str).str.strip().str.lower()
-                    .isin(["yes", "y", "true", "1"])
-                )
-            else:
-                quotes_df["Rebates_Included"] = False
-
-            # Filter out base-case rows (solar=0 and battery=0)
-            solar_quotes = quotes_df[
-                ~((quotes_df["Solar_kW"] == 0) & (quotes_df["Battery_kWh"] == 0))
-            ].reset_index(drop=True)
-        except Exception as e:
-            st.warning(f"Could not load quotes file: {e}")
-            solar_quotes = None
-    else:
-        st.warning(
-            "`solar_battery_quotes.xlsx` not found in the app folder. "
-            "Add it to the repository to enable quote selection."
+        col_order = next(
+            (cols[lc] for lc in cols if any(k in lc for k in ["quote", "number", "order"])),
+            None,
         )
-        solar_quotes = None
+        col_rebates_inc = _fc_opt(["rebate", "include", "already"])
+        col_shade_s  = _fc_opt(["shade_summer"])
+        col_shade_au = _fc_opt(["shade_autumn"])
+        col_shade_w  = _fc_opt(["shade_winter"])
+
+        if col_order:
+            df = df.sort_values(col_order)
+
+        df = df.rename(columns={
+            col_vendor:   "Vendor",
+            col_solar:    "Solar_kW",
+            col_battery:  "Battery_kWh",
+            col_inverter: "Inverter_kW",
+            col_cost:     "Cost_AUD",
+        }).reset_index(drop=True)
+
+        for col_nm, key, default in [
+            ("Shade_Summer", col_shade_s,  0.60),
+            ("Shade_Autumn", col_shade_au, 0.30),
+            ("Shade_Winter", col_shade_w,  0.15),
+        ]:
+            df[col_nm] = pd.to_numeric(df[key], errors="coerce").fillna(default) if key else default
+
+        if col_rebates_inc:
+            df["Rebates_Included"] = (
+                df[col_rebates_inc].astype(str).str.strip().str.lower()
+                .isin(["yes", "y", "true", "1"])
+            )
+        else:
+            df["Rebates_Included"] = False
+
+        for c in ["Solar_kW", "Battery_kWh", "Inverter_kW", "Cost_AUD"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        df = df.dropna(subset=["Vendor", "Solar_kW", "Battery_kWh", "Inverter_kW", "Cost_AUD"])
+        return df[df["Vendor"].astype(str).str.strip() != ""].reset_index(drop=True)
+
+    _src = _quotes_upload if _quotes_upload is not None else (
+        _QUOTES_PATH if _QUOTES_PATH.exists() else None
+    )
+    _raw_quotes_df = _load_quotes_df(_src) if _src is not None else None
+
+    # ── Editable quotes table ────────────────────────────────────────────────
+    _QCOLS = ["Vendor", "Solar_kW", "Battery_kWh", "Inverter_kW",
+              "Cost_AUD", "Rebates_Included", "Shade_Summer", "Shade_Autumn", "Shade_Winter"]
+    _QDEFAULTS = {
+        "Vendor": "", "Solar_kW": 6.6, "Battery_kWh": 13.5, "Inverter_kW": 5.0,
+        "Cost_AUD": 15000, "Rebates_Included": False,
+        "Shade_Summer": 0.60, "Shade_Autumn": 0.30, "Shade_Winter": 0.15,
+    }
+    _edit_base = (
+        _raw_quotes_df[_QCOLS].copy()
+        if _raw_quotes_df is not None
+        else pd.DataFrame([_QDEFAULTS])
+    )
+
+    _valid_edit: pd.DataFrame = pd.DataFrame(columns=_QCOLS)
+
+    with st.expander("Edit / add quotes", expanded=(_raw_quotes_df is None)):
+        st.caption(
+            "Edit cells directly, add rows with the **+** button, or delete rows by selecting them. "
+            "Changes apply for this session only — download the file to save permanently."
+        )
+        _edited = st.data_editor(
+            _edit_base,
+            num_rows="dynamic",
+            column_config={
+                "Vendor":           st.column_config.TextColumn("Vendor / Label", width="large"),
+                "Solar_kW":         st.column_config.NumberColumn("Solar (kW)",    min_value=0.0, max_value=30.0, step=0.5,  format="%.2g"),
+                "Battery_kWh":      st.column_config.NumberColumn("Battery (kWh)", min_value=0.0, max_value=60.0, step=0.5,  format="%.4g"),
+                "Inverter_kW":      st.column_config.NumberColumn("Inverter (kW)", min_value=0.0, max_value=15.0, step=0.5,  format="%.4g"),
+                "Cost_AUD":         st.column_config.NumberColumn("Cost ($AUD)",   min_value=0,                  step=500),
+                "Rebates_Included": st.column_config.CheckboxColumn("Rebates incl.?"),
+                "Shade_Summer":     st.column_config.NumberColumn("Shade Summer",  min_value=0.0, max_value=1.0, step=0.05, format="%.2f"),
+                "Shade_Autumn":     st.column_config.NumberColumn("Shade Au/Sp",   min_value=0.0, max_value=1.0, step=0.05, format="%.2f"),
+                "Shade_Winter":     st.column_config.NumberColumn("Shade Winter",  min_value=0.0, max_value=1.0, step=0.05, format="%.2f"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="quotes_editor",
+        )
+
+        _valid_edit = _edited.dropna(
+            subset=["Vendor", "Solar_kW", "Battery_kWh", "Inverter_kW", "Cost_AUD"]
+        )
+        _valid_edit = _valid_edit[
+            _valid_edit["Vendor"].astype(str).str.strip() != ""
+        ].reset_index(drop=True)
+
+        if len(_valid_edit) > 0:
+            _dl_buf = io.BytesIO()
+            with pd.ExcelWriter(_dl_buf, engine="openpyxl") as _w:
+                _valid_edit.to_excel(_w, sheet_name="quotes", index=False)
+            _dl_buf.seek(0)
+            st.download_button(
+                "⬇️ Download quotes as Excel",
+                data=_dl_buf.read(),
+                file_name="solar_battery_quotes.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+    # Use the (possibly edited) quotes for the rest of the session
+    solar_quotes = (
+        _valid_edit[~((_valid_edit["Solar_kW"] == 0) & (_valid_edit["Battery_kWh"] == 0))]
+        .reset_index(drop=True)
+        if len(_valid_edit) > 0 else None
+    )
 
     TARIFFS = ["Midday Saver", "A1 Flat"]
 
