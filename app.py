@@ -103,6 +103,10 @@ st.set_page_config(
     layout="wide",
 )
 
+from shared.style import apply_theme, page_header
+apply_theme()
+page_header("Solar + Battery Analyser", "Financial & energy comparison across tariff options and battery sizes")
+
 SEASON_MONTHS = {
     "Summer (Dec–Feb)": [12, 1, 2],
     "Autumn (Mar–May)": [3, 4, 5],
