@@ -29,7 +29,7 @@ from solar_battery_analyser import (
     TARIFF_ESC, DEBS_DECL,
     BAT_DOD, BAT_RTE, BAT_DEG, SOL_DEG, SYS_EFF,
     ms_rate, debs_rate, _monthly_net,
-    CS, _QUOTES_FILE, SOLAR_K, SYS_EFF as _SYS_EFF, _lat,
+    CS, _QUOTES_FILE, SOLAR_K, _lat,
     solar_stc_rebate, STC_PRICE,
     compute_irr,
 )
@@ -83,7 +83,7 @@ def add_solar_shaded(raw_df: pd.DataFrame, solar_kw: float,
         if m in (12, 1, 2):    sf = shade_summer
         elif m in (6, 7, 8):   sf = shade_winter
         else:                  sf = shade_autumn   # Mar–May and Sep–Nov
-        return kw * irrad * SOLAR_K * _SYS_EFF * 0.5 * sf
+        return kw * irrad * SOLAR_K * SYS_EFF * 0.5 * sf
 
     cache = {}
     def get(row):
@@ -789,7 +789,7 @@ def make_solar_profile_fig(cfg_a: dict, cfg_b: dict,
         sin_e = (np.sin(_lat) * np.sin(decl)
                  + np.cos(_lat) * np.cos(decl) * np.cos(ha))
         irrad = np.maximum(0.0, sin_e)
-        return solar_kw * irrad * SOLAR_K * _SYS_EFF * 0.5 * shade
+        return solar_kw * irrad * SOLAR_K * SYS_EFF * 0.5 * shade
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharey=False)
     fig.patch.set_facecolor("white")

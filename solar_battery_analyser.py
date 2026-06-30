@@ -27,7 +27,7 @@ warnings.filterwarnings("ignore")
 # =============================================================================
 
 # ─── DATA FILE ───────────────────────────────────────────────────────────────
-DEFAULT_DATA_PATH = "/Users/jonathanking/Python/solar_analysis_output/MyHalfHourlyMeterData-2024.xlsx"
+DEFAULT_DATA_PATH = None  # set to a local xlsx path when running as CLI script
 
 # ── How to read these quotes:
 # Enter the GROSS installed price (before rebates) — code deducts rebates automatically.
