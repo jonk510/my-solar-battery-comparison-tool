@@ -4,4 +4,4 @@ pandas>=2.0.0
 matplotlib>=3.8.0
 openpyxl>=3.1.0
 python-docx>=1.1.0
-git+https://github.com/jonk510/wind-tools-shared.git@426c3a0
+git+https://github.com/jonk510/wind-tools-shared.git@ac91265
